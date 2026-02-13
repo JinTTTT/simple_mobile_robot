@@ -1,0 +1,4 @@
+# ingore build log and install
+build/
+install/
+log/
