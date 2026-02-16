@@ -1,90 +1,135 @@
-# My Bot - Differential Drive Robot
+# Autonomous Driving System
 
-A ROS 2 differential drive robot with Gazebo simulation support.
+A full-stack autonomous driving codebase using Gazebo for simulation. This project focuses on the fundamental pipeline of autonomous driving with minimal external dependencies to help you understand how each component works.
 
-## Setup
+## Project Overview
 
-Build the package:
+This system uses a simple differential drive robot with a 2D lidar sensor in Gazebo simulation. The focus is on core concepts: mapping, localization, simultaneous localization and mapping (SLAM), and navigation.
+
+**Key Features:**
+- Simple robot model with differential drive kinematics
+- 2D lidar simulation (360 degrees, 10m range)
+- Minimal dependencies - understand the fundamentals
+- Educational focus on autonomous driving pipeline
+
+## Project Roadmap
+
+### ✅ Phase 1: Simulation System (Complete)
+Build a simulation environment with a car and lidar sensor.
+
+**Status:** Done
+- Differential drive robot with two wheels and caster
+- 2D lidar sensor (360 samples, 10Hz update rate)
+- Gazebo world with basic environment
+- Odometry and velocity command interfaces
+
+See [`src/my_bot/`](src/my_bot/) for implementation details.
+
+### 🔄 Phase 2: Mapping (In Progress)
+Build 2D occupancy grid maps from lidar scans and odometry data.
+
+**Goals:**
+- Subscribe to `/scan` (lidar data) and `/odom` (odometry)
+- Generate 2D occupancy grid map
+- Publish map on `/map` topic
+- Save/load map functionality
+
+### 📋 Phase 3: Localization (Planned)
+Estimate robot position using particle filter algorithm.
+
+**Goals:**
+- Particle filter implementation
+- Use lidar scans to match against known map
+- Publish robot pose estimate
+- Handle kidnapped robot problem
+
+### 📋 Phase 4: SLAM (Planned)
+Build maps and localize simultaneously.
+
+**Goals:**
+- Combine mapping and localization
+- Loop closure detection
+- Map correction and optimization
+- Real-time performance
+
+### 📋 Phase 5: Navigation (Planned)
+Drive from point A to point B along a collision-free path.
+
+**Goals:**
+- Global path planning (A* or Dijkstra)
+- Local obstacle avoidance
+- Path following control
+- Goal reaching behavior
+
+## Quick Start
+
+### Prerequisites
+- ROS 2 (Humble or later)
+- Gazebo (Ignition/Gazebo)
+- Python 3
+
+### Build and Run
+
+1. **Build the workspace:**
 ```bash
 cd ~/workspace/gazebo_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-## Running the Robot
-
-### 1. Start Gazebo with Robot
-
-Launch the Gazebo simulator with the robot spawned at 0.5m height:
-
+2. **Launch the complete system:**
 ```bash
-ros2 launch my_bot spawn_robot.launch.py
+ros2 launch my_bot bringup_simulation.launch.py
 ```
 
-This starts:
-- Gazebo simulator with an empty world
-- Robot state publisher (publishes URDF as `/robot_description`)
-- Robot spawned in the simulation
+This single command starts:
+- Gazebo simulation with robot
+- ROS 2 ↔ Gazebo bridge for /cmd_vel, /odom, /tf, /scan
 
-### 2. Bridge ROS 2 and Gazebo
-
-In a new terminal, bridge the communication between ROS 2 and Gazebo:
-
-```bash
-ros2 run ros_gz_bridge parameter_bridge \
-  /cmd_vel@geometry_msgs/msg/Twist@ignition.msgs.Twist \
-  /odom@nav_msgs/msg/Odometry@ignition.msgs.Odometry \
-  /tf@tf2_msgs/msg/TFMessage@ignition.msgs.Pose_V \
-  /scan@sensor_msgs/msg/LaserScan@ignition.msgs.LaserScan
-```
-
-This bridges:
-- `/cmd_vel`: Send velocity commands to Gazebo
-- `/odom`: Receive odometry (pose & velocity) from Gazebo
-- `/tf`: Receive transform frames from Gazebo
-
-### 3. Teleop with Keyboard
-
-In a new terminal, start keyboard teleoperation:
-
+3. **Control the robot** (in a new terminal):
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
-**Controls:**
-- `i`: Move forward
-- `,` (comma): Move backward
-- `j`: Spin left (rotate counterclockwise)
-- `l`: Spin right (rotate clockwise)
-- `k`: Stop (emergency brake)
+**Keyboard controls:**
+- `i` = forward, `,` = backward
+- `j` = turn left, `l` = turn right
+- `k` = stop
 
-### 4. Visualize in RViz
+For detailed instructions, see [`src/my_bot/README.md`](src/my_bot/README.md).
 
-In a new terminal, launch RViz for visualization:
+## Project Structure
 
-```bash
-rviz2
+```
+gazebo_ws/
+├── src/
+│   └── my_bot/              # Simulation package (Phase 1)
+│       ├── launch/          # Launch files
+│       ├── urdf/            # Robot description
+│       └── worlds/          # Gazebo world files
+└── README.md                # This file
 ```
 
-**Configuration:**
-- In RViz, set the **Fixed Frame** to `odom` (currently no map frame)
-- Add displays:
-  - **TF**: Visualize the robot's coordinate frames (`odom` → `base_link` → wheels)
-  - **Odometry**: Visualize the robot's pose and velocity estimates
-  - **RobotModel**: Visualize the URDF model (optional, may be redundant with TF/Odometry)
+## Learning Path
 
-## Robot Specifications
+If you're new to autonomous driving, follow this learning path:
 
-- **Base Link:** 0.6m × 0.4m × 0.2m box (mass: 5 kg)
-- **Wheels:** Two driven cylinders (radius: 0.1m, mass: 1 kg each)
-- **Caster:** One passive ball at the front (radius: 0.05m, mass: 1 kg)
-- **Wheel Separation:** 0.45m
-- **Max Linear Velocity:** 0.5 m/s
-- **Max Angular Velocity:** 1 rad/s
+1. **Start with simulation** - Understand how the robot moves and senses
+2. **Build maps** - See how lidar data creates 2D representations
+3. **Add localization** - Learn how robots know where they are
+4. **Combine with SLAM** - Understand the chicken-and-egg problem
+5. **Navigate** - Put it all together to drive autonomously
 
-## Notes
+## Contributing
 
-- The robot uses **differential drive** kinematics; left and right wheel speeds are independently controlled
-- Odometry is computed from wheel feedback and published on `/odom`
-- The transform tree shows `odom` → `base_link`; no map frame is currently configured
-- Replace the fixed frame in RViz with `map` once localization/mapping is added
+This is an educational project. Feel free to:
+- Add comments to explain complex algorithms
+- Improve documentation
+- Optimize implementations
+- Add visualization tools
+
+Keep it simple and educational!
+
+## License
+
+TODO: Add license

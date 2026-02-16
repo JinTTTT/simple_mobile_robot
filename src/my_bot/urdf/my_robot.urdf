@@ -110,6 +110,15 @@
         <origin xyz="0.2 0 -0.1"/>
     </joint>
 
+    <!-- Make caster wheel frictionless for smooth spinning: no more drift to sideways -->
+    <gazebo reference="caster_wheel">
+        <mu1>0.0</mu1>
+        <mu2>0.0</mu2>
+        <kp>1000000.0</kp>
+        <kd>100.0</kd>
+        <material>Gazebo/White</material>
+    </gazebo>
+
     <!-- define lidar-->
     <link name="lidar_link">
         <visual>
