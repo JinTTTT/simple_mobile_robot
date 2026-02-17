@@ -29,22 +29,9 @@ private:
     double origin_x_;
     double origin_y_;
 
-    // parameters for calculating the occupancy probability
-    // use log odds
-    std::vector<double> map_log_odds_;
-
-    // case 1:
-    const double p_hit_occ = 0.90;  //  p_occ = P(sensor says 'hit' | cell occupied)
-    const double p_pass_occ = 1.0 - p_hit_occ; // p_pass_occ = P(sensor says 'pass' | cell occupied)    
-    // case 2:
-    const double p_hit_free = 0.05;  // p_hit_free = P(sensor says 'hit' | cell free)
-    const double p_pass_free = 1.0 - p_hit_free; // p_pass_free = P(sensor says 'pass' | cell free)
-    
-    double log_odds_hit;
-    double log_odds_pass;
-
-    const double log_odds_max = 10.0;
-    const double log_odds_min = -10.0;
+    // Hit/pass counters
+    std::vector<int> hits_;
+    std::vector<int> passes_;
 
     geometry_msgs::msg::Pose current_pose_;
     bool pose_received_;
@@ -75,13 +62,12 @@ OccupancyMapper::OccupancyMapper() : Node("occupancy_mapper")
     RCLCPP_INFO(this->get_logger(), "Resolution: %.2f m/cell", resolution_);
     RCLCPP_INFO(this->get_logger(), "Coverage: %.1f x %.1f meters", width_ * resolution_, height_ * resolution_);
 
-    // Initialize for log odds mapping update
-    map_log_odds_.resize(width_ * height_, 0.0); // initialize prior as 0, means no prior knowledge
-    
-    log_odds_hit = std::log(p_hit_occ / p_hit_free);
-    log_odds_pass = std::log(p_pass_occ / p_pass_free);
+    // Initialize map data
+    int total_cells = width_ * height_;
+    hits_.resize(total_cells, 0);
+    passes_.resize(total_cells, 0);
 
-    RCLCPP_INFO(this->get_logger(), "Log odds hit: %.2f, Log odds pass: %.2f", log_odds_hit, log_odds_pass);
+    RCLCPP_INFO(this->get_logger(), "Map data initialized with %d cells", total_cells);
 
     // Setup map message
     map_msg_.header.frame_id = "odom";
@@ -92,7 +78,7 @@ OccupancyMapper::OccupancyMapper() : Node("occupancy_mapper")
     map_msg_.info.origin.position.y = origin_y_;
     map_msg_.info.origin.position.z = 0.0;
     map_msg_.info.origin.orientation.w = 1.0;
-    map_msg_.data.resize(width_ * height_, -1);
+    map_msg_.data.resize(total_cells, -1);
 
     // Create subscriptions
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odom", 10, std::bind(&OccupancyMapper::odom_callback, this, std::placeholders::_1));
@@ -168,22 +154,13 @@ void OccupancyMapper::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr
             int cell_x = cells[j].first;
             int cell_y = cells[j].second;
             int index = cell_y * width_ + cell_x;
-            
-            // update log odds, reduce prob with log odds pass
-            map_log_odds_[index] += log_odds_pass;
-            if (map_log_odds_[index] < log_odds_min) {
-                map_log_odds_[index] = log_odds_min;
-            }
+            passes_[index]++;
         }
 
         int hit_x = cells.back().first;
         int hit_y = cells.back().second;
         int hit_index = hit_y * width_ + hit_x;
-        
-        map_log_odds_[hit_index] += log_odds_hit;
-        if (map_log_odds_[hit_index] > log_odds_max) {
-            map_log_odds_[hit_index] = log_odds_max;
-        }
+        hits_[hit_index]++;
 
         beams_processed++;
     }
@@ -219,18 +196,22 @@ void OccupancyMapper::publish_map_timer()
     map_msg_.header.stamp = this->now();
 
     for (int i = 0; i < width_ * height_; i++) {
-        double log_odds = map_log_odds_[i];
+        int total = hits_[i] + passes_[i];
 
-        // convert log odds to probability: L = log(P / (1 - P)), so P = 1 / (1 + exp(-L))
-        double prob = 1.0 / (1.0 + std::exp(-log_odds));
-
-        // add threshold
-        if ( prob > 0.65) {
-            map_msg_.data[i] = 100; //occupied
-        } else if (prob < 0.35) {
-            map_msg_.data[i] = 0; // free
+        if(total == 0) {
+            map_msg_.data[i] = -1;
         } else {
-            map_msg_.data[i] = -1; // unknown
+            double probability = static_cast<double>(hits_[i]) / total;
+            // map_msg_.data[i] = static_cast<int8_t>(probability * 100);
+
+            // threshold: > 0.65 wall. < 0.35 free, otherwise unknown
+            if (probability > 0.65) {
+                map_msg_.data[i] = 100;
+            } else if (probability < 0.35) {
+                map_msg_.data[i] = 0;
+            } else {
+                map_msg_.data[i] = -1;
+            }
         }
     }
 
