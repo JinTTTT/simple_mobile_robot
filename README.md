@@ -25,14 +25,17 @@ Build a simulation environment with a car and lidar sensor.
 
 See [`src/my_bot/`](src/my_bot/) for implementation details.
 
-### 🔄 Phase 2: Mapping (In Progress)
+### ✅ Phase 2: Mapping (Complete)
 Build 2D occupancy grid maps from lidar scans and odometry data.
 
-**Goals:**
-- Subscribe to `/scan` (lidar data) and `/odom` (odometry)
-- Generate 2D occupancy grid map
-- Publish map on `/map` topic
-- Save/load map functionality
+**Status:** Done
+- Subscribes to `/scan` (lidar data) and `/odom` (odometry)
+- Generates 2D occupancy grid map using simple counting method
+- Publishes map on `/map` topic at 2 Hz
+- Real-time visualization in RViz
+- Bresenham ray tracing for efficient grid updates
+
+See [`src/mapping/`](src/mapping/) for implementation details.
 
 ### 📋 Phase 3: Localization (Planned)
 Estimate robot position using particle filter algorithm.
@@ -96,17 +99,32 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 - `j` = turn left, `l` = turn right
 - `k` = stop
 
-For detailed instructions, see [`src/my_bot/README.md`](src/my_bot/README.md).
+4. **Run the mapper** (in a new terminal):
+```bash
+ros2 run mapping occupancy_mapper
+```
+
+5. **Visualize the map** (in a new terminal):
+```bash
+rviz2
+```
+
+In RViz: Set Fixed Frame to `odom`, then Add → By topic → `/map` → Map
+
+For detailed instructions, see [`src/my_bot/README.md`](src/my_bot/README.md) and [`src/mapping/README.md`](src/mapping/README.md).
 
 ## Project Structure
 
 ```
 gazebo_ws/
 ├── src/
-│   └── my_bot/              # Simulation package (Phase 1)
-│       ├── launch/          # Launch files
-│       ├── urdf/            # Robot description
-│       └── worlds/          # Gazebo world files
+│   ├── my_bot/              # Simulation package (Phase 1)
+│   │   ├── launch/          # Launch files
+│   │   ├── urdf/            # Robot description
+│   │   └── worlds/          # Gazebo world files
+│   └── mapping/             # Mapping package (Phase 2)
+│       ├── src/             # C++ source files
+│       └── CMakeLists.txt   # Build configuration
 └── README.md                # This file
 ```
 

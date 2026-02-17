@@ -162,6 +162,7 @@
                 </horizontal>
                 <vertical>
                 <samples>1</samples>
+                <!-- the error if lidar is 0.01 m-->
                 <resolution>0.01</resolution>
                 <min_angle>0</min_angle>
                 <max_angle>0</max_angle>
