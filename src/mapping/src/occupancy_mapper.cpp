@@ -3,6 +3,9 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "geometry_msgs/msg/pose.hpp"
+#include "tf2_ros/transform_listener.h"
+#include "tf2_ros/buffer.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include <cmath>
 
 class OccupancyMapper : public rclcpp::Node
@@ -12,7 +15,6 @@ public:
 
 private:
     // Callbacks
-    void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg);
     void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
     void publish_map_timer();
 
@@ -34,10 +36,10 @@ private:
     std::vector<double> map_log_odds_;
 
     // case 1:
-    const double p_hit_occ = 0.90;  //  p_occ = P(sensor says 'hit' | cell occupied)
+    const double p_hit_occ = 0.70;  //  p_occ = P(sensor says 'hit' | cell occupied)
     const double p_pass_occ = 1.0 - p_hit_occ; // p_pass_occ = P(sensor says 'pass' | cell occupied)    
     // case 2:
-    const double p_hit_free = 0.05;  // p_hit_free = P(sensor says 'hit' | cell free)
+    const double p_hit_free = 0.40;  // p_hit_free = P(sensor says 'hit' | cell free)
     const double p_pass_free = 1.0 - p_hit_free; // p_pass_free = P(sensor says 'pass' | cell free)
     
     double log_odds_hit;
@@ -45,6 +47,10 @@ private:
 
     const double log_odds_max = 10.0;
     const double log_odds_min = -10.0;
+
+    // TF2 for transform lookup
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     geometry_msgs::msg::Pose current_pose_;
     bool pose_received_;
@@ -55,13 +61,16 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
 
     // Subscriptions
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
 };
 
 OccupancyMapper::OccupancyMapper() : Node("occupancy_mapper")
 {
     pose_received_ = false;
+
+    // Initialize TF2
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
     // Initialize map parameters
     resolution_ = 0.05;
@@ -95,40 +104,54 @@ OccupancyMapper::OccupancyMapper() : Node("occupancy_mapper")
     map_msg_.data.resize(width_ * height_, -1);
 
     // Create subscriptions
-    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>("/odom", 10, std::bind(&OccupancyMapper::odom_callback, this, std::placeholders::_1));
     scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>("/scan", 10, std::bind(&OccupancyMapper::scan_callback, this, std::placeholders::_1));
 
     // Create publisher
     map_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("/map", 10);
     timer_ = this->create_wall_timer(std::chrono::milliseconds(500), std::bind(&OccupancyMapper::publish_map_timer, this));
 
-    RCLCPP_INFO(this->get_logger(), "Subscribed to /odom and /scan");
+    RCLCPP_INFO(this->get_logger(), "Subscribed to /scan");
+    RCLCPP_INFO(this->get_logger(), "Listening to TF: odom -> base_link");
     RCLCPP_INFO(this->get_logger(), "Publishing map on /map at 2 Hz");
     RCLCPP_INFO(this->get_logger(), "Waiting for data...");
 }
 
-void OccupancyMapper::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
-{
-    current_pose_ = msg->pose.pose;
-
-    if(!pose_received_)
-    {
-        RCLCPP_INFO(this->get_logger(), "First pose received");
-        pose_received_ = true;
-    }
-}
-
 void OccupancyMapper::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
 {
-    if (!pose_received_)
-    {
-        RCLCPP_WARN(this->get_logger(), "Scan received but no odometry yet - skipping");
+    // Look up the transform from base_link to odom at the scan timestamp
+    geometry_msgs::msg::TransformStamped transform_stamped;
+    
+    try {
+        // Wait up to 100ms for the transform
+        transform_stamped = tf_buffer_->lookupTransform(
+            "odom", "base_link",
+            msg->header.stamp,
+            rclcpp::Duration::from_seconds(0.1));
+    }
+    catch (tf2::TransformException &ex) {
+        RCLCPP_WARN(this->get_logger(), "Could not get transform: %s", ex.what());
         return;
     }
 
-    double robot_x = current_pose_.position.x;
-    double robot_y = current_pose_.position.y;
-    double robot_theta = get_yaw_from_quaternion(current_pose_.orientation);
+    if(!pose_received_)
+    {
+        RCLCPP_INFO(this->get_logger(), "First transform received");
+        pose_received_ = true;
+    }
+
+    // Extract pose from transform
+    double robot_x = transform_stamped.transform.translation.x;
+    double robot_y = transform_stamped.transform.translation.y;
+    
+    // Convert quaternion to yaw
+    tf2::Quaternion q(
+        transform_stamped.transform.rotation.x,
+        transform_stamped.transform.rotation.y,
+        transform_stamped.transform.rotation.z,
+        transform_stamped.transform.rotation.w);
+    tf2::Matrix3x3 m(q);
+    double roll, pitch, robot_theta;
+    m.getRPY(roll, pitch, robot_theta);
 
     int robot_grid_x, robot_grid_y;
     world_to_grid(robot_x, robot_y, robot_grid_x, robot_grid_y);
@@ -224,14 +247,17 @@ void OccupancyMapper::publish_map_timer()
         // convert log odds to probability: L = log(P / (1 - P)), so P = 1 / (1 + exp(-L))
         double prob = 1.0 / (1.0 + std::exp(-log_odds));
 
-        // add threshold
-        if ( prob > 0.65) {
-            map_msg_.data[i] = 100; //occupied
-        } else if (prob < 0.35) {
-            map_msg_.data[i] = 0; // free
-        } else {
-            map_msg_.data[i] = -1; // unknown
-        }
+        // // add threshold with hysteresis to prevent flickering
+        // if ( prob > 0.70) {
+        //     map_msg_.data[i] = 100; //occupied
+        // } else if (prob < 0.30) {
+        //     map_msg_.data[i] = 0; // free
+        // } else {
+        //     map_msg_.data[i] = -1; // unknown
+        // }
+
+        // no threshold, just map the log odds to probability
+        map_msg_.data[i] = static_cast<int>(prob * 100);
     }
 
     map_pub_->publish(map_msg_);
