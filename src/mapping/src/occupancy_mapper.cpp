@@ -36,17 +36,17 @@ private:
     std::vector<double> map_log_odds_;
 
     // case 1:
-    const double p_hit_occ = 0.70;  //  p_occ = P(sensor says 'hit' | cell occupied)
+    const double p_hit_occ = 0.90;  //  p_occ = P(sensor says 'hit' | cell occupied)
     const double p_pass_occ = 1.0 - p_hit_occ; // p_pass_occ = P(sensor says 'pass' | cell occupied)    
     // case 2:
-    const double p_hit_free = 0.40;  // p_hit_free = P(sensor says 'hit' | cell free)
+    const double p_hit_free = 0.05;  // p_hit_free = P(sensor says 'hit' | cell free)
     const double p_pass_free = 1.0 - p_hit_free; // p_pass_free = P(sensor says 'pass' | cell free)
     
     double log_odds_hit;
     double log_odds_pass;
 
-    const double log_odds_max = 10.0;
-    const double log_odds_min = -10.0;
+    const double log_odds_max = 1000.0;
+    const double log_odds_min = -1000.0;
 
     // TF2 for transform lookup
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -132,7 +132,7 @@ void OccupancyMapper::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr
         RCLCPP_WARN(this->get_logger(), "Could not get transform: %s", ex.what());
         return;
     }
-
+    
     if(!pose_received_)
     {
         RCLCPP_INFO(this->get_logger(), "First transform received");
