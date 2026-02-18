@@ -83,6 +83,49 @@ ros2 run mapping occupancy_mapper
 - Tune saturation limits (try ±5.0 for better responsiveness)
 - Phase 3 (Localization) and Phase 4 (SLAM) will address drift and loop closure
 
+---
+
+## ⚠️ CRITICAL: Laser Scan Rotation Issue - SOLVED
+
+### The Problem
+**Symptom:** When the robot rotates, the laser scan appears to rotate/fly away from walls in RViz, causing severe map distortion. During translation (forward/backward), the scan works perfectly and sticks to walls.
+
+### Root Cause
+**The `base_link` origin was NOT at the robot's rotation center!**
+
+In a differential drive robot:
+- Rotation happens around the **wheel axis** (midpoint between left and right wheels)
+- Odometry publishes the `odom → base_link` transform for the base_link position
+- **If base_link origin ≠ wheel axis**, then during pure rotation:
+  - The base_link origin moves in a circle around the wheel axis
+  - The lidar sensor (mounted relative to base_link) also moves in a circle
+  - But the mapping code assumes the robot rotates in place!
+  - Result: Scan points are projected from the wrong location → map distortion
+
+### The Fix ✅
+
+**Move `base_link` origin to the wheel axis (rotation center):**
+
+```xml
+<!-- WRONG - base_link ahead of wheels -->
+<joint name="left_wheel_joint" type="continuous">
+    <origin xyz="-0.15 0.225 -0.05" rpy="-1.57 0 0"/>  <!-- ❌ Wheels behind base_link -->
+</joint>
+
+<!-- CORRECT - base_link at wheel axis -->
+<joint name="left_wheel_joint" type="continuous">
+    <origin xyz="0 0.225 -0.05" rpy="-1.57 0 0"/>  <!-- ✅ Wheels at base_link origin -->
+</joint>
+```
+
+### Implementation Details
+
+**Updated URDF (`my_robot.urdf`):**
+1. **Wheels**: Moved from `x=-0.15` to `x=0` (now at base_link origin)
+2. **Lidar**: Positioned at `x=0, y=0, z=0.12` (at rotation center)
+3. **Caster**: Adjusted from `x=0.2` to `x=0.35` (compensate for new reference frame)
+
+
 ## Parameter Tuning Guide
 
 **Saturation Limits (`log_odds_max/min`):**

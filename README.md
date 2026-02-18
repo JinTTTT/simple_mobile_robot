@@ -30,10 +30,13 @@ Build 2D occupancy grid maps from lidar scans and odometry data.
 
 **Status:** Done
 - Subscribes to `/scan` (lidar data) and `/odom` (odometry)
-- Generates 2D occupancy grid map using simple counting method
+- Generates 2D occupancy grid map using log-odds Bayesian method
 - Publishes map on `/map` topic at 2 Hz
 - Real-time visualization in RViz
 - Bresenham ray tracing for efficient grid updates
+
+**⚠️ Critical Lesson Learned:**
+For differential drive robots, the `base_link` origin MUST be placed at the wheel axis (rotation center), not ahead of it. Otherwise, during rotation, the base_link moves in a circle causing severe map distortion. See [mapping README](src/mapping/README.md#critical-laser-scan-rotation-issue---solved) for detailed explanation.
 
 See [`src/mapping/`](src/mapping/) for implementation details.
 

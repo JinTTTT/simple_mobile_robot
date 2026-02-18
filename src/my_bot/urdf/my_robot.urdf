@@ -51,7 +51,7 @@
     <joint name="left_wheel_joint" type="continuous">
         <parent link="base_link"/>  
         <child link="left_wheel"/>  
-        <origin xyz="-0.15 0.225 -0.05" rpy="-1.57 0 0"/>
+        <origin xyz="0 0.225 -0.05" rpy="-1.57 0 0"/>  <!-- Changed from x=-0.15 to x=0 -->
         <axis xyz="0 0 1"/>
     </joint>
 
@@ -79,7 +79,7 @@
     <joint name="right_wheel_joint" type="continuous">
         <parent link="base_link"/>
         <child link="right_wheel"/>
-        <origin xyz="-0.15 -0.225 -0.05" rpy="-1.57 0 0"/>
+        <origin xyz="0 -0.225 -0.05" rpy="-1.57 0 0"/>  <!-- Changed from x=-0.15 to x=0 -->
         <axis xyz="0 0 1"/>
     </joint>
 
@@ -107,7 +107,7 @@
     <joint name="caster_joint" type="fixed">
         <parent link="base_link"/>
         <child link="caster_wheel"/>
-        <origin xyz="0.2 0 -0.1"/>
+        <origin xyz="0.35 0 -0.1"/>  <!-- Changed from 0.2 to 0.35 (moved back 0.15m) -->
     </joint>
 
     <!-- Make caster wheel frictionless for smooth spinning: no more drift to sideways -->
@@ -143,7 +143,7 @@
     <joint name="lidar_joint" type="fixed">
         <parent link="base_link"/>
         <child link="lidar_link"/>
-        <origin xyz="0 0 0.12" rpy="0 0 0"/>
+        <origin xyz="0 0 0.12" rpy="0 0 0"/>  <!-- Back to center since base_link is now at wheel axis -->
     </joint>
 
     <gazebo reference="lidar_link">
