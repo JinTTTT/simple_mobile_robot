@@ -22,133 +22,23 @@ ros2 run mapping occupancy_mapper
 - `occupancy_mapper.cpp` - Current log-odds Bayesian method
 - `occupancy_mapper_simple_count_method.cpp` - Original simple counting method (backup)
 
-## Algorithm
+## Algorithm used
+
+**Bresenham ray tracing:**
+- To return the cells that the laser beam hits.
 
 **Log-Odds Bayesian Update Method:**
-- Uses **log-odds representation** for probabilistic occupancy mapping
-- Implements proper Bayesian sensor fusion with configurable sensor model
-- Real-time map updates using Bresenham ray tracing for each laser beam
-- Publishes map at 2 Hz
+- To update the occupancy grid map based on the laser scan.
+- Gradually update using bayesian.
 
-**Sensor Model (configurable):**
-- `P(hit|occupied)` = 0.90 (90% obstacle detection rate)
-- `P(hit|free)` = 0.05 (5% false positive rate)
-- Log-odds updates: `log_odds_hit` ≈ 2.89, `log_odds_pass` ≈ -2.25
-- Saturation limits: ±10.0 (prevents infinite confidence)
 
-**Map Configuration:**
-- Resolution: 0.05m (5cm per cell)
-- Size: 200×200 cells (10m × 10m)
-- Subscribes: `/scan`, `/odom`
-- Publishes: `/map`
+## Current Issues to solve
 
-**Thresholding:**
-- Occupied: probability > 65%
-- Free: probability < 35%
-- Unknown: 35% ≤ probability ≤ 65%
+1. Cannot detect removed obstacles. Once an obstacle is mapped, removing it physically won't update the map. 
 
-## Current Status and Limitations
+2. Trusts odometry 100%, no correction. 
 
-**Improvements over simple counting:**
-- ✅ Bayesian sensor fusion (mathematically principled)
-- ✅ Configurable sensor model (accounts for sensor noise)
-- ✅ Saturation limits (prevents over-confidence)
-- ✅ Real-time updates with reasonable responsiveness
-
-**Known Issues:**
-
-1. **Static world assumption** - Cannot detect removed obstacles. Once an obstacle is mapped, removing it physically won't update the map. The saturation limits make this worse - a cell at max confidence requires many contradictory observations to flip.
-
-2. **Parameter tuning needed** - Current parameters may not be optimal:
-   - `log_odds_max/min` (±10.0) might be too high (slow to adapt)
-   - Sensor model probabilities need validation against real performance
-   - Thresholds (65%/35%) are somewhat arbitrary
-
-3. **Odometry drift** - Trusts odometry 100%, no correction. Long sessions cause:
-   - Duplicate walls when revisiting areas
-   - Ghost obstacles from accumulated drift
-   - Map inconsistencies
-
-4. **Map accuracy** - Limited by:
-   - Grid discretization (5cm cells)
-   - Ray-tracing approximation
-   - Sensor noise and odometry errors
-   - Lack of free space handling for max-range returns
-
-5. **No loop closure** - Cannot detect when returning to known locations, no map optimization.
-
-**Future Improvements:**
-- Handle max-range lidar returns (mark free space in open areas)
-- Implement map boundary clipping (don't skip out-of-bounds observations)
-- Tune saturation limits (try ±5.0 for better responsiveness)
-- Phase 3 (Localization) and Phase 4 (SLAM) will address drift and loop closure
+3. No loop closure - Cannot detect when returning to known locations, no map optimization.
 
 ---
 
-## ⚠️ CRITICAL: Laser Scan Rotation Issue - SOLVED
-
-### The Problem
-**Symptom:** When the robot rotates, the laser scan appears to rotate/fly away from walls in RViz, causing severe map distortion. During translation (forward/backward), the scan works perfectly and sticks to walls.
-
-### Root Cause
-**The `base_link` origin was NOT at the robot's rotation center!**
-
-In a differential drive robot:
-- Rotation happens around the **wheel axis** (midpoint between left and right wheels)
-- Odometry publishes the `odom → base_link` transform for the base_link position
-- **If base_link origin ≠ wheel axis**, then during pure rotation:
-  - The base_link origin moves in a circle around the wheel axis
-  - The lidar sensor (mounted relative to base_link) also moves in a circle
-  - But the mapping code assumes the robot rotates in place!
-  - Result: Scan points are projected from the wrong location → map distortion
-
-### The Fix ✅
-
-**Move `base_link` origin to the wheel axis (rotation center):**
-
-```xml
-<!-- WRONG - base_link ahead of wheels -->
-<joint name="left_wheel_joint" type="continuous">
-    <origin xyz="-0.15 0.225 -0.05" rpy="-1.57 0 0"/>  <!-- ❌ Wheels behind base_link -->
-</joint>
-
-<!-- CORRECT - base_link at wheel axis -->
-<joint name="left_wheel_joint" type="continuous">
-    <origin xyz="0 0.225 -0.05" rpy="-1.57 0 0"/>  <!-- ✅ Wheels at base_link origin -->
-</joint>
-```
-
-### Implementation Details
-
-**Updated URDF (`my_robot.urdf`):**
-1. **Wheels**: Moved from `x=-0.15` to `x=0` (now at base_link origin)
-2. **Lidar**: Positioned at `x=0, y=0, z=0.12` (at rotation center)
-3. **Caster**: Adjusted from `x=0.2` to `x=0.35` (compensate for new reference frame)
-
-
-## Parameter Tuning Guide
-
-**Saturation Limits (`log_odds_max/min`):**
-
-Current: `±10.0` → 99.995% confidence (very stable, slow to change)
-
-| Value | Max Confidence | Observations to Flip | Use Case |
-|-------|----------------|---------------------|----------|
-| ±2.0  | 88% | ~2 scans | Dynamic environments, noisy |
-| ±5.0  | 99.3% | ~5 scans | **Recommended balance** |
-| ±7.0  | 99.9% | ~7 scans | Static, stable mapping |
-| ±10.0 | 99.995% | ~9 scans | Very stable, hard to update |
-
-**How to tune:**
-- Map too noisy/flickering? → Increase limits (±7.0)
-- Ghost obstacles won't disappear? → Decrease limits (±5.0)
-- Obstacles slow to appear? → Decrease limits (±3.0)
-
-**Sensor Model Probabilities:**
-
-Current: `P(hit|occupied)=0.90`, `P(hit|free)=0.05`
-
-- Higher `P(hit|occupied)` → Trust obstacle detections more
-- Lower `P(hit|free)` → Assume fewer false positives
-- For perfect simulation: can increase both (0.95 and 0.02)
-- For noisy sensors: decrease confidence (0.7 and 0.1)

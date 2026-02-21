@@ -15,7 +15,7 @@ def generate_launch_description():
 
     # 1. Include the spawn_robot launch file
     # This starts Gazebo, spawns the robot, and publishes robot state
-    pkg_path = get_package_share_directory('my_bot')
+    pkg_path = get_package_share_directory('simulation')
     spawn_robot_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_path, 'launch', 'spawn_robot.launch.py')

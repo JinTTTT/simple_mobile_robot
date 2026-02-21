@@ -16,7 +16,7 @@ source install/setup.bash
 ### Quick Start
 
 ```bash
-ros2 launch my_bot bringup_simulation.launch.py
+ros2 launch simulation bringup_simulation.launch.py
 ```
 
 This starts Gazebo with the robot and the ROS 2 ↔ Gazebo bridge.

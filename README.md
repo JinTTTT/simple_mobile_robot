@@ -18,27 +18,23 @@ This system uses a simple differential drive robot with a 2D lidar sensor in Gaz
 Build a simulation environment with a car and lidar sensor.
 
 **Status:** Done
-- Differential drive robot with two wheels and caster
+- Differential drive robot with two wheels and a caster wheel
 - 2D lidar sensor (360 samples, 10Hz update rate)
 - Gazebo world with basic environment
-- Odometry and velocity command interfaces
+- Publish `/odom` (odometry) and `/scan` (lidar data)
+- Allow to use keyboard to control the robot
 
-See [`src/my_bot/`](src/my_bot/) for implementation details.
+See [`src/simulation/`](src/simulation/) for implementation details.
 
 ### ✅ Phase 2: Mapping (Complete)
 Build 2D occupancy grid maps from lidar scans and odometry data.
 
 **Status:** Done
 - Subscribes to `/scan` (lidar data) and `/odom` (odometry)
-- Generates 2D occupancy grid map using log-odds Bayesian method
 - Publishes map on `/map` topic at 2 Hz
-- Real-time visualization in RViz
 - Bresenham ray tracing for efficient grid updates
+- Log-odds Bayesian method for gradual updates
 
-**⚠️ Critical Lesson Learned:**
-For differential drive robots, the `base_link` origin MUST be placed at the wheel axis (rotation center), not ahead of it. Otherwise, during rotation, the base_link moves in a circle causing severe map distortion. See [mapping README](src/mapping/README.md#critical-laser-scan-rotation-issue---solved) for detailed explanation.
-
-See [`src/mapping/`](src/mapping/) for implementation details.
 
 ### 📋 Phase 3: Localization (Planned)
 Estimate robot position using particle filter algorithm.
@@ -85,7 +81,7 @@ source install/setup.bash
 
 2. **Launch the complete system:**
 ```bash
-ros2 launch my_bot bringup_simulation.launch.py
+ros2 launch simulation bringup_simulation.launch.py
 ```
 
 This single command starts:
@@ -114,14 +110,14 @@ rviz2
 
 In RViz: Set Fixed Frame to `odom`, then Add → By topic → `/map` → Map
 
-For detailed instructions, see [`src/my_bot/README.md`](src/my_bot/README.md) and [`src/mapping/README.md`](src/mapping/README.md).
+For detailed instructions, see [`src/simulation/README.md`](src/simulation/README.md) and [`src/mapping/README.md`](src/mapping/README.md).
 
 ## Project Structure
 
 ```
 gazebo_ws/
 ├── src/
-│   ├── my_bot/              # Simulation package (Phase 1)
+│   ├── simulation/              # Simulation package (Phase 1)
 │   │   ├── launch/          # Launch files
 │   │   ├── urdf/            # Robot description
 │   │   └── worlds/          # Gazebo world files

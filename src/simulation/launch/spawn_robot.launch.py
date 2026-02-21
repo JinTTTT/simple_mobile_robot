@@ -8,8 +8,8 @@ from launch_ros.actions import Node
 def generate_launch_description():
 
     # 1. SETUP: Get the path to our package and the URDF file
-    # We need to know *exactly* where your 'my_bot' package is installed
-    pkg_path = get_package_share_directory('my_bot')
+    # We need to know *exactly* where your 'simulation' package is installed
+    pkg_path = get_package_share_directory('simulation')
     urdf_file = os.path.join(pkg_path, 'urdf', 'my_robot.urdf')
 
     # 2. CONFIG: Read the URDF file specifically
