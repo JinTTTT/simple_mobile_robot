@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -11,6 +11,12 @@ def generate_launch_description():
     # We need to know *exactly* where your 'simulation' package is installed
     pkg_path = get_package_share_directory('simulation')
     urdf_file = os.path.join(pkg_path, 'urdf', 'my_robot.urdf')
+
+    models_path = os.path.join(pkg_path, 'models')
+    gazebo_model_path_env = SetEnvironmentVariable(
+        'GZ_SIM_RESOURCE_PATH',
+        models_path
+    )
 
     # 2. CONFIG: Read the URDF file specifically
     # Gazebo needs the actual XML text content, not just the file path
@@ -36,6 +42,8 @@ def generate_launch_description():
         arguments=[
             '-topic', 'robot_description', # The topic where the URDF is published
             '-name', 'my_first_robot',     # The name it will have in Gazebo
+            '-x', '0.0',
+            '-y', '0.0',
             '-z', '0.5'                    # Spawn it 0.5 meters high (so it drops)
         ],
         output='screen'
@@ -54,6 +62,7 @@ def generate_launch_description():
 
     # 6. RETURN: Send all these actions to ROS to execute
     return LaunchDescription([
+        gazebo_model_path_env, #
         start_gazebo,
         robot_state_publisher,
         spawn_entity,

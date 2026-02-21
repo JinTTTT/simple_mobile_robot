@@ -67,5 +67,12 @@
         </visual>
       </link>
     </model>
+
+    <!-- Include the turtlebot3_house model from models folder-->
+    <include>
+      <uri>model://turtlebot3_house</uri>
+      <pose>4.0 -1.0 0 0 0 0</pose>
+    </include>
+
   </world>
 </sdf>
