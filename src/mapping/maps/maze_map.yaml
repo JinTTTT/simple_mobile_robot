@@ -1,0 +1,7 @@
+image: maze_map.pgm
+mode: trinary
+resolution: 0.05
+origin: [-7.0, -10.0, 0.0] # so that the center of the map is at (0,0)
+negate: 0
+occupied_thresh: 0.90
+free_thresh: 0.10

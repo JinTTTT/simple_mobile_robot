@@ -38,5 +38,5 @@ def generate_launch_description():
 
     return LaunchDescription([
         static_map_odom,    # must come first so TF is ready when mapper starts
-        occupancy_mapper,
+        #occupancy_mapper,
     ])

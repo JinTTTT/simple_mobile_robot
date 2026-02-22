@@ -74,8 +74,8 @@ OccupancyMapper::OccupancyMapper() : Node("occupancy_mapper")
 
     // Initialize map parameters: 10m x 10m area with 5cm resolution
     resolution_ = 0.05;
-    width_ = 200;
-    height_ = 200;
+    width_ = 500;
+    height_ = 500;
     origin_x_ = -width_ * resolution_ / 2.0;
     origin_y_ = -height_ * resolution_ / 2.0;
 
@@ -214,7 +214,7 @@ void OccupancyMapper::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr
     }
 
     if (beams_processed > 0) {
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "Processed %d beams...", beams_processed);
+        //RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "Processed %d beams...", beams_processed);
     }
 
  
