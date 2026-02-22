@@ -45,8 +45,8 @@ private:
     double log_odds_hit;
     double log_odds_pass;
 
-    const double log_odds_max = 1000.0;
-    const double log_odds_min = -1000.0;
+    const double log_odds_max = 10.0;
+    const double log_odds_min = -10.0;
 
     // TF2 for transform lookup
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
@@ -72,7 +72,7 @@ OccupancyMapper::OccupancyMapper() : Node("occupancy_mapper")
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-    // Initialize map parameters
+    // Initialize map parameters: 10m x 10m area with 5cm resolution
     resolution_ = 0.05;
     width_ = 200;
     height_ = 200;
@@ -93,7 +93,7 @@ OccupancyMapper::OccupancyMapper() : Node("occupancy_mapper")
     RCLCPP_INFO(this->get_logger(), "Log odds hit: %.2f, Log odds pass: %.2f", log_odds_hit, log_odds_pass);
 
     // Setup map message
-    map_msg_.header.frame_id = "odom";
+    map_msg_.header.frame_id = "map";
     map_msg_.info.resolution = resolution_;
     map_msg_.info.width = width_;
     map_msg_.info.height = height_;
@@ -106,8 +106,10 @@ OccupancyMapper::OccupancyMapper() : Node("occupancy_mapper")
     // Create subscriptions
     scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>("/scan", 10, std::bind(&OccupancyMapper::scan_callback, this, std::placeholders::_1));
 
-    // Create publisher
-    map_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("/map", 10);
+    // Create publisher with TRANSIENT_LOCAL durability so late subscribers
+    // (e.g. map_saver_cli, rviz2) receive the last map message immediately on connect.
+    auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+    map_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("/map", qos);
     timer_ = this->create_wall_timer(std::chrono::milliseconds(500), std::bind(&OccupancyMapper::publish_map_timer, this));
 
     RCLCPP_INFO(this->get_logger(), "Subscribed to /scan");

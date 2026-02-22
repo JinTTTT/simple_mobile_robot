@@ -68,10 +68,10 @@
       </link>
     </model>
 
-    <!-- Include the turtlebot3_house model from models folder-->
+    <!-- Include the simple_room maze model -->
     <include>
-      <uri>model://turtlebot3_house</uri>
-      <pose>4.0 -1.0 0 0 0 0</pose>
+      <uri>model://simple_room</uri>
+      <pose>0 0 0 0 0 0</pose>
     </include>
 
   </world>
