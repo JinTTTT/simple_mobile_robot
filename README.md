@@ -1,6 +1,8 @@
 # Autonomous Driving System
 
-A full-stack autonomous driving codebase using Gazebo for simulation. This project focuses on the fundamental pipeline of autonomous driving with minimal external dependencies to help you understand how each component works.
+A full-stack autonomous driving codebase using Gazebo for simulating diff drive robot, a enviroment of department, a lidar sensor. We aim to build mapping, localization and navigation in this project.
+
+We focus on building a fundamental pipeline with minimal external dependencies to understand how each component works.
 
 ## Project Overview
 
@@ -20,7 +22,7 @@ Build a simulation environment with a car and lidar sensor.
 **Status:** Done
 - Differential drive robot with two wheels and a caster wheel
 - 2D lidar sensor (360 samples, 10Hz update rate)
-- Gazebo world with basic environment
+- Gazebo world with environment with a department layout
 - Publish `/odom` (odometry) and `/scan` (lidar data)
 - Allow to use keyboard to control the robot
 

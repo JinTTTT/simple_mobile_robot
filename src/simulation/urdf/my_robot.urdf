@@ -4,24 +4,24 @@
     <link name="base_link">
 
         <visual>
-            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <origin xyz="0.15 0 0" rpy="0 0 0"/>
             <geometry>
-            <!-- here define length width height symmetric to the origin-->
-            <box size="0.6 0.4 0.2"/> 
+            <!-- Asymmetric box: length 0.3, width 0.2, height 0.1, shifted 0.15m in +x -->
+            <box size="0.3 0.2 0.1"/> 
             </geometry>
             <material name="blue">
             <color rgba="0 0 1 1"/> </material>
         </visual>
 
         <collision>
-            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <origin xyz="0.15 0 0" rpy="0 0 0"/>
             <geometry>
-            <box size="0.6 0.4 0.2"/>
+            <box size="0.3 0.2 0.1"/>
             </geometry>
         </collision>
 
         <inertial>
-            <mass value="5.0"/> <inertia ixx="0.1" ixy="0.0" ixz="0.0" iyy="0.1" iyz="0.0" izz="0.1"/>
+            <mass value="1.0"/> <inertia ixx="0.1" ixy="0.0" ixz="0.0" iyy="0.1" iyz="0.0" izz="0.1"/>
         </inertial>
 
     </link>
@@ -31,7 +31,7 @@
     <link name="left_wheel">
         <visual>
             <geometry>
-            <cylinder radius="0.1" length="0.05"/>
+            <cylinder radius="0.05" length="0.05"/>
             </geometry>
             <material name="black">
             <color rgba="0 0 0 1"/>
@@ -39,7 +39,7 @@
         </visual>
         <collision>
             <geometry>
-            <cylinder radius="0.1" length="0.05"/>
+            <cylinder radius="0.05" length="0.05"/>
             </geometry>
         </collision>
         <inertial>
@@ -51,7 +51,7 @@
     <joint name="left_wheel_joint" type="continuous">
         <parent link="base_link"/>  
         <child link="left_wheel"/>  
-        <origin xyz="0 0.225 -0.05" rpy="-1.57 0 0"/>  <!-- Changed from x=-0.15 to x=0 -->
+        <origin xyz="0 0.125 -0.05" rpy="-1.57 0 0"/>  <!-- x=0, y at left edge -->
         <axis xyz="0 0 1"/>
     </joint>
 
@@ -59,7 +59,7 @@
     <link name="right_wheel">
         <visual>
             <geometry>
-            <cylinder radius="0.1" length="0.05"/>
+            <cylinder radius="0.05" length="0.05"/>
             </geometry>
             <material name="black">
             <color rgba="0 0 0 1"/>
@@ -67,7 +67,7 @@
         </visual>
         <collision>
             <geometry>
-            <cylinder radius="0.1" length="0.05"/>
+            <cylinder radius="0.05" length="0.05"/>
             </geometry>
         </collision>
         <inertial>
@@ -79,7 +79,7 @@
     <joint name="right_wheel_joint" type="continuous">
         <parent link="base_link"/>
         <child link="right_wheel"/>
-        <origin xyz="0 -0.225 -0.05" rpy="-1.57 0 0"/>  <!-- Changed from x=-0.15 to x=0 -->
+        <origin xyz="0 -0.125 -0.05" rpy="-1.57 0 0"/>  <!-- x=0, y at right edge -->
         <axis xyz="0 0 1"/>
     </joint>
 
@@ -99,7 +99,7 @@
             </geometry>
         </collision>
         <inertial>
-            <mass value="1.0"/>
+            <mass value="2.0"/>
             <inertia ixx="0.1" ixy="0" ixz="0" iyy="0.1" iyz="0" izz="0.1"/>
         </inertial>
     </link>
@@ -107,7 +107,7 @@
     <joint name="caster_joint" type="fixed">
         <parent link="base_link"/>
         <child link="caster_wheel"/>
-        <origin xyz="0.35 0 -0.1"/>  <!-- Changed from 0.2 to 0.35 (moved back 0.15m) -->
+        <origin xyz="0.3 0 -0.05"/>  <!-- At front, half-embedded in baselink -->
     </joint>
 
     <!-- Make caster wheel frictionless for smooth spinning: no more drift to sideways -->
@@ -143,7 +143,7 @@
     <joint name="lidar_joint" type="fixed">
         <parent link="base_link"/>
         <child link="lidar_link"/>
-        <origin xyz="0 0 0.12" rpy="0 0 0"/>  <!-- Back to center since base_link is now at wheel axis -->
+        <origin xyz="0 0 0.07" rpy="0 0 0"/>  <!-- x=0, on top of baselink -->
     </joint>
 
     <gazebo reference="lidar_link">
@@ -186,8 +186,8 @@
             <left_joint>left_wheel_joint</left_joint>
             <right_joint>right_wheel_joint</right_joint>
             
-            <wheel_separation>0.45</wheel_separation>
-            <wheel_radius>0.1</wheel_radius>
+            <wheel_separation>0.25</wheel_separation>
+            <wheel_radius>0.05</wheel_radius>
             
             <max_linear_acceleration>1</max_linear_acceleration>
             <min_linear_acceleration>-1</min_linear_acceleration>
