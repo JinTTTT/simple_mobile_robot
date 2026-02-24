@@ -11,6 +11,7 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
@@ -27,7 +28,15 @@ if(BUILD_TESTING)
 endif()
 
 # 1. tell cmake which source file to complile into executable
-add_executable(localization_node src/localization_node.cpp)
+add_executable(localization_node 
+  src/localization_node.cpp
+  src/particle_filter.cpp
+)
+
+# 1. tell cmake where to find header files
+target_include_directories(localization_node PUBLIC
+  include
+)
 
 # 2. link dependecies to executable
 ament_target_dependencies(localization_node
@@ -35,6 +44,7 @@ ament_target_dependencies(localization_node
   sensor_msgs
   nav_msgs
   geometry_msgs
+  tf2
   tf2_ros
   tf2_geometry_msgs
 )

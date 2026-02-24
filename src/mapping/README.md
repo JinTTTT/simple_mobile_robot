@@ -30,7 +30,7 @@ It will generate a map in the maps folder. Then you have to add .yaml file as in
 
 2. Use map_serverto publish it as a topic `/map`
 ```bash
-ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=<path_to_your_map.yaml>
+ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=src/mapping/maps/maze_map.yaml
 ```
 Map server is lifecycle node, you need to activate with a new terminal:
 ```bash
