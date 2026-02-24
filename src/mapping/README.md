@@ -34,7 +34,7 @@ ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=<path_to_your_m
 ```
 Map server is lifecycle node, you need to activate with a new terminal:
 ```bash
-ros2 run nav2_utils lifecycle_bringup map_server
+ros2 run nav2_util lifecycle_bringup map_server
 ```
 You should see `/map` topic published.
 
