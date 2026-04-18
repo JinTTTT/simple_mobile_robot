@@ -5,6 +5,12 @@
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Transform.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/transform_listener.h>
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
@@ -22,6 +28,7 @@ private:
 
     void publish_particles();
     void publish_estimated_pose();
+    void publish_map_to_odom_tf();
 
     // Subscriptions
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
@@ -32,6 +39,11 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr particle_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr estimated_pose_pub_;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr likelihood_field_pub_;
+
+    // TF
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     // State
     nav_msgs::msg::OccupancyGrid map_;
@@ -48,6 +60,10 @@ private:
 LocalizationNode::LocalizationNode()
 : Node("localization_node"), pf_(500)   // 500 particles
 {
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+    tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+
     map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
         "/map", 10,
         std::bind(&LocalizationNode::map_callback, this, std::placeholders::_1));
@@ -115,6 +131,7 @@ void LocalizationNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr ms
 
     publish_particles();
     publish_estimated_pose();
+    publish_map_to_odom_tf();
 }
 
 void LocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
@@ -125,6 +142,7 @@ void LocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPt
     pf_.resample();
     publish_particles();
     publish_estimated_pose();
+    publish_map_to_odom_tf();
 
     RCLCPP_INFO_THROTTLE(
         this->get_logger(),
@@ -168,6 +186,47 @@ void LocalizationNode::publish_estimated_pose()
     msg.pose.orientation.w = std::cos(estimate.theta / 2.0);
 
     estimated_pose_pub_->publish(msg);
+}
+
+void LocalizationNode::publish_map_to_odom_tf()
+{
+    EstimatedPose estimate = pf_.estimatePose();
+
+    tf2::Quaternion map_to_base_rotation;
+    map_to_base_rotation.setRPY(0.0, 0.0, estimate.theta);
+
+    tf2::Transform map_to_base;
+    map_to_base.setOrigin(tf2::Vector3(estimate.x, estimate.y, 0.0));
+    map_to_base.setRotation(map_to_base_rotation);
+
+    geometry_msgs::msg::TransformStamped odom_to_base_msg;
+    try {
+        odom_to_base_msg = tf_buffer_->lookupTransform(
+            "odom",
+            "base_link",
+            tf2::TimePointZero);
+    } catch (const tf2::TransformException & ex) {
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            1000,
+            "Could not publish map->odom TF: %s",
+            ex.what());
+        return;
+    }
+
+    tf2::Transform odom_to_base;
+    tf2::fromMsg(odom_to_base_msg.transform, odom_to_base);
+
+    tf2::Transform map_to_odom = map_to_base * odom_to_base.inverse();
+
+    geometry_msgs::msg::TransformStamped map_to_odom_msg;
+    map_to_odom_msg.header.stamp = odom_to_base_msg.header.stamp;
+    map_to_odom_msg.header.frame_id = "map";
+    map_to_odom_msg.child_frame_id = "odom";
+    map_to_odom_msg.transform = tf2::toMsg(map_to_odom);
+
+    tf_broadcaster_->sendTransform(map_to_odom_msg);
 }
 
 int main(int argc, char ** argv)

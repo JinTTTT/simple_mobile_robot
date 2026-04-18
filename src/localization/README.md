@@ -19,15 +19,15 @@ Right now it can:
 - resample particles using stochastic universal resampling
 - publish particles on `/particlecloud`
 - publish one estimated robot pose on `/estimated_pose`
+- publish the `map -> odom` transform
 
 Right now it does not yet:
 
-- publish the `map` to `odom` transform
 - add realistic noise to the odometry motion model
 - decide when resampling is needed instead of resampling on every scan
 
 So this is now a working first particle-filter localization version.
-It can localize visually in RViz, but it is not a full ROS navigation localizer yet.
+It can localize visually in RViz and publish the normal ROS localization TF.
 
 ## Topics
 
@@ -42,6 +42,7 @@ It publishes:
 - `/particlecloud`
 - `/likelihood_field`
 - `/estimated_pose`
+- TF: `map -> odom`
 
 `/particlecloud` is a `PoseArray`.
 In RViz, each pose is drawn as one arrow.
@@ -55,6 +56,14 @@ Cells far from walls have low values.
 `/estimated_pose` is a `PoseStamped`.
 It is one pose calculated from the particle cloud.
 This is the package's current best guess of the robot pose.
+
+The `map -> odom` transform connects the global map frame to the odometry frame.
+Gazebo already publishes `odom -> base_link`.
+Together they form:
+
+```text
+map -> odom -> base_link
+```
 
 ## Build
 
@@ -89,29 +98,24 @@ rviz2
 Terminal 4:
 
 ```bash
-ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map odom
-```
-
-This is a temporary fix.
-It says `map` and `odom` are the same frame.
-
-Terminal 5:
-
-```bash
 ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=src/mapping/maps/maze_map.yaml
 ```
 
-Terminal 6:
+Terminal 5:
 
 ```bash
 ros2 run nav2_util lifecycle_bringup map_server
 ```
 
-Terminal 7:
+Terminal 6:
 
 ```bash
 ros2 run localization localization_node
 ```
+
+Do not run the old static `map -> odom` transform.
+The localization node now publishes `map -> odom`.
+If two nodes publish the same transform, TF can become confused.
 
 In RViz:
 
@@ -167,12 +171,26 @@ These are almost the same direction.
 A normal average would give the wrong answer.
 The sine/cosine average handles this better.
 
+The node also publishes `map -> odom`.
+The idea is:
+
+```text
+map_to_odom = map_to_base_link * inverse(odom_to_base_link)
+```
+
+`map_to_base_link` comes from the particle filter estimate.
+`odom_to_base_link` comes from Gazebo odometry TF.
+The result lets ROS use this standard frame chain:
+
+```text
+map -> odom -> base_link
+```
+
 ## Later Improvements
 
 The current version is good for learning and visual testing.
 Later we should improve:
 
-- publish the `map -> odom` transform
 - add motion noise, because real odometry is not perfect
 - resample only when needed, not necessarily on every scan
 - improve the laser sensor model
