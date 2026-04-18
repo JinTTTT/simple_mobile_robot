@@ -1,4 +1,6 @@
 #include "localization/particle_filter.hpp"
+#include <algorithm>
+#include <queue>
 #include <random>
 #include <cmath>
 
@@ -44,6 +46,80 @@ void ParticleFilter::initUniform(const nav_msgs::msg::OccupancyGrid & map)
     }
 }
 
+void ParticleFilter::buildLikelihoodField(const nav_msgs::msg::OccupancyGrid & map)
+{
+    likelihood_field_map_ = map;
+
+    int width = map.info.width;
+    int height = map.info.height;
+    int total_cells = width * height;
+    double resolution = map.info.resolution;
+
+    double max_distance_m = 1.0;
+    int max_distance_cells = static_cast<int>(std::ceil(max_distance_m / resolution));
+
+    // Distance starts as "far from wall".
+    // Later, wall cells spread smaller distance values to their neighbors.
+    std::vector<int> distance_to_wall(total_cells, max_distance_cells);
+    std::queue<int> cells_to_visit;
+
+    for (int i = 0; i < total_cells; ++i) {
+        if (map.data[i] > 50) {
+            distance_to_wall[i] = 0;
+            cells_to_visit.push(i);
+        }
+    }
+
+    const int neighbor_offsets[4][2] = {
+        {1, 0},
+        {-1, 0},
+        {0, 1},
+        {0, -1}
+    };
+
+    // This is like dropping ink on all wall cells.
+    // The ink spreads one cell at a time into nearby free cells.
+    while (!cells_to_visit.empty()) {
+        int index = cells_to_visit.front();
+        cells_to_visit.pop();
+
+        int row = index / width;
+        int col = index % width;
+        int next_distance = distance_to_wall[index] + 1;
+
+        if (next_distance > max_distance_cells) {
+            continue;
+        }
+
+        for (const auto & offset : neighbor_offsets) {
+            int next_col = col + offset[0];
+            int next_row = row + offset[1];
+
+            if (next_col < 0 || next_row < 0 || next_col >= width || next_row >= height) {
+                continue;
+            }
+
+            int next_index = next_row * width + next_col;
+            if (next_distance >= distance_to_wall[next_index]) {
+                continue;
+            }
+
+            distance_to_wall[next_index] = next_distance;
+            cells_to_visit.push(next_index);
+        }
+    }
+
+    likelihood_field_map_.data.assign(total_cells, 0);
+
+    for (int i = 0; i < total_cells; ++i) {
+        double distance_m = distance_to_wall[i] * resolution;
+        double likelihood = 1.0 - std::min(distance_m / max_distance_m, 1.0);
+
+        likelihood_field_map_.data[i] =
+            static_cast<int8_t>(std::round(likelihood * 100.0));
+    }
+}
+
 void ParticleFilter::sampleMotionModel(
     double old_x, double old_y, double old_theta,
     double new_x, double new_y, double new_theta)
@@ -67,4 +143,9 @@ void ParticleFilter::sampleMotionModel(
 const std::vector<Particle> & ParticleFilter::getParticles() const
 {
     return particles_;
+}
+
+const nav_msgs::msg::OccupancyGrid & ParticleFilter::getLikelihoodFieldMap() const
+{
+    return likelihood_field_map_;
 }

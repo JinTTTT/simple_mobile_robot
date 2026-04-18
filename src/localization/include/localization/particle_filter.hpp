@@ -18,12 +18,17 @@ public:
 
     void initUniform(const nav_msgs::msg::OccupancyGrid& map);
 
+    void buildLikelihoodField(const nav_msgs::msg::OccupancyGrid& map);
+
     void sampleMotionModel(double old_x, double old_y, double old_theta,
                             double new_x, double new_y, double new_theta);
+
+    const nav_msgs::msg::OccupancyGrid & getLikelihoodFieldMap() const;
     
     const std::vector<Particle> & getParticles() const;
 
 private:
     int num_particles_;
     std::vector<Particle> particles_;
+    nav_msgs::msg::OccupancyGrid likelihood_field_map_;
 };

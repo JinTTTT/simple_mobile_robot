@@ -28,6 +28,7 @@ private:
 
     // Publisher
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr particle_pub_;
+    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr likelihood_field_pub_;
 
     // State
     nav_msgs::msg::OccupancyGrid map_;
@@ -58,6 +59,12 @@ LocalizationNode::LocalizationNode()
 
     particle_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("/particlecloud", 10);
 
+    rclcpp::QoS map_qos(1);
+    map_qos.transient_local();
+    map_qos.reliable();
+    likelihood_field_pub_ =
+        this->create_publisher<nav_msgs::msg::OccupancyGrid>("/likelihood_field", map_qos);
+
     RCLCPP_INFO(this->get_logger(), "LocalizationNode started.");
 }
 
@@ -65,9 +72,12 @@ void LocalizationNode::map_callback(const nav_msgs::msg::OccupancyGrid::SharedPt
 {
     map_ = *msg;
     map_received_ = true;
+    pf_.buildLikelihoodField(map_);
     pf_.initUniform(map_);
+    likelihood_field_pub_->publish(pf_.getLikelihoodFieldMap());
     RCLCPP_INFO(this->get_logger(),
-        "Map received: %d x %d cells. Particles initialised.", msg->info.width, msg->info.height);
+        "Map received: %d x %d cells. Likelihood field built. Particles initialised.",
+        msg->info.width, msg->info.height);
 }
 
 void LocalizationNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
