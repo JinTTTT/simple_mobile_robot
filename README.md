@@ -1,156 +1,217 @@
-# Autonomous Driving System
+# Mobile Robot Full Stack Learning Repo
 
-A full-stack autonomous driving codebase using Gazebo for simulating diff drive robot, a enviroment of department, a lidar sensor. We aim to build mapping, localization and navigation in this project.
+This repo is my place to learn the full software stack of a mobile robot.
 
-We focus on building a fundamental pipeline with minimal external dependencies to understand how each component works.
+The long term goal is to learn:
 
-## Project Overview
+- simulation
+- mapping
+- localization
+- SLAM
+- planning
+- navigation
 
-This system uses a simple differential drive robot with a 2D lidar sensor in Gazebo simulation. The focus is on core concepts: mapping, localization, simultaneous localization and mapping (SLAM), and navigation.
+Right now I am working on the localization stage.
 
-**Key Features:**
-- Simple robot model with differential drive kinematics
-- 2D lidar simulation (360 degrees, 10m range)
-- Minimal dependencies - understand the fundamentals
-- Educational focus on autonomous driving pipeline
+## Packages
 
-## Project Roadmap
+### `simulation`
 
-### ✅ Phase 1: Simulation System (Complete)
-Build a simulation environment with a car and lidar sensor.
+This package starts the robot in Gazebo.
 
-**Status:** Done
-- Differential drive robot with two wheels and a caster wheel
-- 2D lidar sensor (360 samples, 10Hz update rate)
-- Gazebo world with environment with a department layout
-- Publish `/odom` (odometry) and `/scan` (lidar data)
-- Allow to use keyboard to control the robot
+It gives the robot:
 
-See [`src/simulation/`](src/simulation/) for implementation details.
+- differential drive movement
+- a 2D lidar
+- odometry on `/odom`
+- laser scans on `/scan`
+- TF data for the robot frames
 
-### ✅ Phase 2: Mapping (Complete)
-Build 2D occupancy grid maps from lidar scans and odometry data.
+The robot can be controlled with keyboard teleop by publishing velocity commands to `/cmd_vel`.
 
-**Status:** Done
-- Subscribes to `/scan` (lidar data) and `/odom` (odometry)
-- Publishes map on `/map` topic at 2 Hz
-- Bresenham ray tracing for efficient grid updates
-- Log-odds Bayesian method for gradual updates
+### `mapping`
 
+This package builds an occupancy grid map.
 
-### 📋 Phase 3: Localization (Planned)
-Estimate robot position using particle filter algorithm.
+It reads:
 
-**Goals:**
-- Particle filter implementation
-- Use lidar scans to match against known map
-- Publish robot pose estimate
-- Handle kidnapped robot problem
+- `/scan` from the lidar
+- TF from `odom` to `base_link`
 
-### 📋 Phase 4: SLAM (Planned)
-Build maps and localize simultaneously.
+It publishes:
 
-**Goals:**
-- Combine mapping and localization
-- Loop closure detection
-- Map correction and optimization
-- Real-time performance
+- `/map`
 
-### 📋 Phase 5: Navigation (Planned)
-Drive from point A to point B along a collision-free path.
+The mapper uses Bresenham ray tracing and log-odds updates.
 
-**Goals:**
-- Global path planning (A* or Dijkstra)
-- Local obstacle avoidance
-- Path following control
-- Goal reaching behavior
+Simple meaning:
+
+- cells along a laser beam become more likely to be free
+- the cell hit by the laser becomes more likely to be occupied
+- repeated scans make the map more confident
+
+### `localization`
+
+This package is the current learning stage.
+
+It starts a simple particle filter.
+
+It reads:
+
+- `/map`
+- `/odom`
+- `/scan`
+
+It publishes:
+
+- `/particlecloud`
+
+For now, the particles are initialized on free map cells and moved with odometry.
+The laser scan is subscribed, but it is not used for particle weights yet.
 
 ## Quick Start
 
 ### Prerequisites
-- ROS 2 (Humble or later)
-- Gazebo (Ignition/Gazebo)
-- Python 3
 
-### Build and Run
+Install:
 
-1. **Build the workspace:**
+- ROS 2
+- Gazebo / Gazebo Sim
+- `colcon`
+- `teleop_twist_keyboard`
+- Nav2 map server tools
+
+Useful ROS packages:
+
+```bash
+sudo apt install ros-humble-teleop-twist-keyboard
+sudo apt install ros-humble-nav2-map-server ros-humble-nav2-util
+```
+
+### Build
+
+From the workspace root:
+
 ```bash
 cd ~/workspace/gazebo_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-2. **Launch the complete system:**
+Open a new terminal for each command below.
+In each new terminal, source the workspace first:
+
+```bash
+cd ~/workspace/gazebo_ws
+source install/setup.bash
+```
+
+## Run Case 1: Mapping
+
+### 1. Start simulation
+
 ```bash
 ros2 launch simulation bringup_simulation.launch.py
 ```
 
-This single command starts:
-- Gazebo simulation with robot
-- ROS 2 ↔ Gazebo bridge for /cmd_vel, /odom, /tf, /scan
+### 2. Start teleop
 
-3. **Control the robot** (in a new terminal):
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
-**Keyboard controls:**
-- `i` = forward, `,` = backward
-- `j` = turn left, `l` = turn right
-- `k` = stop
+Use the keyboard to drive the robot around.
+The mapper needs robot movement to see the world.
 
-4. **Run the mapper** (in a new terminal):
+### 3. Start mapper
+
 ```bash
 ros2 run mapping occupancy_mapper
 ```
 
-5. **Visualize the map** (in a new terminal):
+### 4. View in RViz
+
 ```bash
 rviz2
 ```
 
-In RViz: Set Fixed Frame to `odom`, then Add → By topic → `/map` → Map
+In RViz:
 
-For detailed instructions, see [`src/simulation/README.md`](src/simulation/README.md) and [`src/mapping/README.md`](src/mapping/README.md).
+- set Fixed Frame to `map`
+- add the `/map` topic
+
+## Run Case 2: Localization
+
+### 1. Start simulation
+
+```bash
+ros2 launch simulation bringup_simulation.launch.py
+```
+
+### 2. Start teleop
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
+### 3. Start RViz
+
+```bash
+rviz2
+```
+
+For now the TF tree is not complete.
+Use this temporary static transform:
+
+```bash
+ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map odom
+```
+
+This says: "for now, treat `map` and `odom` as the same frame."
+
+### 4. Publish the saved map
+
+Start the map server:
+
+```bash
+ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=src/mapping/maps/maze_map.yaml
+```
+
+Activate the lifecycle node:
+
+```bash
+ros2 run nav2_util lifecycle_bringup map_server
+```
+
+### 5. Start localization
+
+```bash
+ros2 run localization localization_node
+```
+
+In RViz:
+
+- set Fixed Frame to `map`
+- add the `/map` topic
+- add the `/particlecloud` topic
+
+The `/particlecloud` topic shows the particles.
+Each particle is one possible robot pose.
 
 ## Project Structure
 
-```
+```text
 gazebo_ws/
-├── src/
-│   ├── simulation/              # Simulation package (Phase 1)
-│   │   ├── launch/          # Launch files
-│   │   ├── urdf/            # Robot description
-│   │   └── worlds/          # Gazebo world files
-│   └── mapping/             # Mapping package (Phase 2)
-│       ├── src/             # C++ source files
-│       └── CMakeLists.txt   # Build configuration
-└── README.md                # This file
+├── README.md
+└── src/
+    ├── simulation/
+    ├── mapping/
+    └── localization/
 ```
 
-## Learning Path
+## Current Status
 
-If you're new to autonomous driving, follow this learning path:
-
-1. **Start with simulation** - Understand how the robot moves and senses
-2. **Build maps** - See how lidar data creates 2D representations
-3. **Add localization** - Learn how robots know where they are
-4. **Combine with SLAM** - Understand the chicken-and-egg problem
-5. **Navigate** - Put it all together to drive autonomously
-
-## Contributing
-
-This is an educational project. Feel free to:
-- Add comments to explain complex algorithms
-- Improve documentation
-- Optimize implementations
-- Add visualization tools
-
-Keep it simple and educational!
-
-## License
-
-TODO: Add license
-
-## Hello World
+- Simulation works.
+- Mapping works as a basic occupancy grid mapper.
+- Localization has the first particle filter structure.
+- Localization still needs laser scan scoring and resampling.
