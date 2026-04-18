@@ -54,7 +54,7 @@ Simple meaning:
 
 This package is the current learning stage.
 
-It starts a simple particle filter.
+It runs a first working particle filter localizer.
 
 It reads:
 
@@ -65,9 +65,19 @@ It reads:
 It publishes:
 
 - `/particlecloud`
+- `/likelihood_field`
+- `/estimated_pose`
+- TF: `map -> odom`
 
-For now, the particles are initialized on free map cells and moved with odometry.
-The laser scan is subscribed, but it is not used for particle weights yet.
+It uses the saved map, odometry, and laser scans to estimate the robot pose.
+The particle filter:
+
+- starts particles on free map cells
+- builds a likelihood field from the map
+- moves particles using odometry with small motion noise
+- scores particles using laser scans
+- resamples after robot movement
+- publishes the estimated pose and the normal ROS `map -> odom` transform
 
 ## Quick Start
 
@@ -160,15 +170,6 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 rviz2
 ```
 
-For now the TF tree is not complete.
-Use this temporary static transform:
-
-```bash
-ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map odom
-```
-
-This says: "for now, treat `map` and `odom` as the same frame."
-
 ### 4. Publish the saved map
 
 Start the map server:
@@ -193,10 +194,16 @@ In RViz:
 
 - set Fixed Frame to `map`
 - add the `/map` topic
+- add the `/likelihood_field` topic
 - add the `/particlecloud` topic
+- add the `/estimated_pose` topic
 
 The `/particlecloud` topic shows the particles.
 Each particle is one possible robot pose.
+The `/estimated_pose` topic shows the current best pose estimate.
+
+Do not run a static `map -> odom` transform during localization.
+The localization node publishes `map -> odom`.
 
 ## Project Structure
 
@@ -213,5 +220,6 @@ gazebo_ws/
 
 - Simulation works.
 - Mapping works as a basic occupancy grid mapper.
-- Localization has the first particle filter structure.
-- Localization still needs laser scan scoring and resampling.
+- Localization has a first working particle filter.
+- Localization publishes `/particlecloud`, `/likelihood_field`, `/estimated_pose`, and `map -> odom`.
+- Localization still needs tuning and later improvements, such as better scan scoring and confidence output.

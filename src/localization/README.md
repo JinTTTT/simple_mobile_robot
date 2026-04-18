@@ -21,10 +21,6 @@ Right now it can:
 - publish one estimated robot pose on `/estimated_pose`
 - publish the `map -> odom` transform
 
-Right now it does not yet:
-
-- decide when resampling is needed instead of resampling on every scan
-
 So this is now a working first particle-filter localization version.
 It can localize visually in RViz and publish the normal ROS localization TF.
 
@@ -158,6 +154,8 @@ Bad particles get lower scores.
 After scoring, resampling keeps more good particles and removes more bad particles.
 This package uses stochastic universal resampling.
 This is also called low-variance resampling.
+The node only resamples after odometry has moved the particles.
+This avoids repeatedly shrinking the particle cloud while the robot is standing still.
 
 The node also publishes `/estimated_pose`.
 It averages the particle positions.
@@ -193,7 +191,7 @@ map -> odom -> base_link
 The current version is good for learning and visual testing.
 Later we should improve:
 
-- resample only when needed, not necessarily on every scan
+- use effective sample size to decide when resampling is needed
 - improve the laser sensor model
 - publish confidence information, so we know how certain the estimate is
 - add parameters for particle count, beam step, noise, and resampling behavior

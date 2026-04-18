@@ -53,6 +53,7 @@ private:
     double last_odom_y_     = 0.0;
     double last_odom_theta_ = 0.0;
     bool   odom_initialized_ = false;
+    bool   particles_moved_since_last_resample_ = false;
 
     ParticleFilter pf_;
 };
@@ -124,6 +125,7 @@ void LocalizationNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr ms
     if (std::abs(dx) < 0.001 && std::abs(dy) < 0.001 && std::abs(dtheta) < 0.001) return;
 
     pf_.sampleMotionModel(last_odom_x_, last_odom_y_, last_odom_theta_, x, y, theta);
+    particles_moved_since_last_resample_ = true;
 
     last_odom_x_     = x;
     last_odom_y_     = y;
@@ -139,7 +141,10 @@ void LocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPt
     if (!map_received_) return;
 
     ScanScoreStats stats = pf_.scoreParticlesWithScan(*msg);
-    pf_.resample();
+    if (particles_moved_since_last_resample_) {
+        pf_.resample();
+        particles_moved_since_last_resample_ = false;
+    }
     publish_particles();
     publish_estimated_pose();
     publish_map_to_odom_tf();
