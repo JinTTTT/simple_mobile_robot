@@ -11,7 +11,8 @@ The long term goal is to learn:
 - planning
 - navigation
 
-Right now I am working on the localization stage.
+The first localization stage is now complete.
+The repo has a working particle-filter localizer on a saved map.
 
 ## Packages
 
@@ -52,7 +53,7 @@ Simple meaning:
 
 ### `localization`
 
-This package is the current learning stage.
+This package is the completed first localization stage.
 
 It runs a first working particle filter localizer.
 
@@ -220,6 +221,7 @@ gazebo_ws/
 
 - Simulation works.
 - Mapping works as a basic occupancy grid mapper.
-- Localization has a first working particle filter.
+- Localization first version is complete.
+- Localization uses a particle filter with a likelihood field, laser scan scoring, motion noise, and resampling.
 - Localization publishes `/particlecloud`, `/likelihood_field`, `/estimated_pose`, and `map -> odom`.
-- Localization still needs tuning and later improvements, such as better scan scoring and confidence output.
+- Future localization improvements can include better scan scoring, confidence output, and more tuning.
