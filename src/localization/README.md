@@ -23,7 +23,6 @@ Right now it can:
 
 Right now it does not yet:
 
-- add realistic noise to the odometry motion model
 - decide when resampling is needed instead of resampling on every scan
 
 So this is now a working first particle-filter localization version.
@@ -144,6 +143,9 @@ This means: "the robot could be anywhere free."
 
 When odometry says the robot moved, every particle moves too.
 This means: "if the robot moved forward, every guess should move forward."
+The motion model adds small random noise.
+This means particles do not all move in exactly the same way.
+That is useful because real odometry is not perfect.
 
 When a laser scan arrives, each particle gets a score.
 The score asks:
@@ -191,7 +193,6 @@ map -> odom -> base_link
 The current version is good for learning and visual testing.
 Later we should improve:
 
-- add motion noise, because real odometry is not perfect
 - resample only when needed, not necessarily on every scan
 - improve the laser sensor model
 - publish confidence information, so we know how certain the estimate is

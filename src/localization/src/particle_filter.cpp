@@ -132,11 +132,22 @@ void ParticleFilter::sampleMotionModel(
     double delta_trans = std::sqrt(std::pow(new_x - old_x, 2) + std::pow(new_y - old_y, 2));
     double delta_rot2  = new_theta - old_theta - delta_rot1;
 
-    // Apply the exact same delta to every particle (v1.0: zero noise)
+    double trans_noise_std = 0.02 * delta_trans + 0.005;
+    double rot1_noise_std = 0.05 * std::abs(delta_rot1) + 0.01 * delta_trans + 0.002;
+    double rot2_noise_std = 0.05 * std::abs(delta_rot2) + 0.01 * delta_trans + 0.002;
+
+    std::normal_distribution<double> trans_noise(0.0, trans_noise_std);
+    std::normal_distribution<double> rot1_noise(0.0, rot1_noise_std);
+    std::normal_distribution<double> rot2_noise(0.0, rot2_noise_std);
+
     for (auto & p : particles_) {
-        p.x     += delta_trans * std::cos(p.theta + delta_rot1);
-        p.y     += delta_trans * std::sin(p.theta + delta_rot1);
-        p.theta += delta_rot1 + delta_rot2;
+        double noisy_rot1 = delta_rot1 + rot1_noise(rng_);
+        double noisy_trans = delta_trans + trans_noise(rng_);
+        double noisy_rot2 = delta_rot2 + rot2_noise(rng_);
+
+        p.x     += noisy_trans * std::cos(p.theta + noisy_rot1);
+        p.y     += noisy_trans * std::sin(p.theta + noisy_rot1);
+        p.theta = normalizeAngle(p.theta + noisy_rot1 + noisy_rot2);
     }
 }
 
