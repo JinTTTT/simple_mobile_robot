@@ -4,6 +4,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/pose.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
@@ -20,6 +21,7 @@ private:
     void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
 
     void publish_particles();
+    void publish_estimated_pose();
 
     // Subscriptions
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
@@ -28,6 +30,7 @@ private:
 
     // Publisher
     rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr particle_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr estimated_pose_pub_;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr likelihood_field_pub_;
 
     // State
@@ -58,6 +61,8 @@ LocalizationNode::LocalizationNode()
         std::bind(&LocalizationNode::scan_callback, this, std::placeholders::_1));
 
     particle_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("/particlecloud", 10);
+    estimated_pose_pub_ =
+        this->create_publisher<geometry_msgs::msg::PoseStamped>("/estimated_pose", 10);
 
     rclcpp::QoS map_qos(1);
     map_qos.transient_local();
@@ -109,11 +114,26 @@ void LocalizationNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr ms
     last_odom_theta_ = theta;
 
     publish_particles();
+    publish_estimated_pose();
 }
 
 void LocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
 {
-    (void)msg;  // not used yet in v1.0
+    if (!map_received_) return;
+
+    ScanScoreStats stats = pf_.scoreParticlesWithScan(*msg);
+    pf_.resample();
+    publish_particles();
+    publish_estimated_pose();
+
+    RCLCPP_INFO_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        1000,
+        "Scan scores: best=%.3f average=%.3f worst=%.3f",
+        stats.best_score,
+        stats.average_score,
+        stats.worst_score);
 }
 
 void LocalizationNode::publish_particles()
@@ -133,6 +153,21 @@ void LocalizationNode::publish_particles()
     }
 
     particle_pub_->publish(msg);
+}
+
+void LocalizationNode::publish_estimated_pose()
+{
+    EstimatedPose estimate = pf_.estimatePose();
+
+    geometry_msgs::msg::PoseStamped msg;
+    msg.header.stamp = this->now();
+    msg.header.frame_id = "map";
+    msg.pose.position.x = estimate.x;
+    msg.pose.position.y = estimate.y;
+    msg.pose.orientation.z = std::sin(estimate.theta / 2.0);
+    msg.pose.orientation.w = std::cos(estimate.theta / 2.0);
+
+    estimated_pose_pub_->publish(msg);
 }
 
 int main(int argc, char ** argv)

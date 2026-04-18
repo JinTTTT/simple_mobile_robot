@@ -1,11 +1,12 @@
 #include "localization/particle_filter.hpp"
 #include <algorithm>
+#include <limits>
 #include <queue>
 #include <random>
 #include <cmath>
 
 ParticleFilter::ParticleFilter(int num_particles)
-    : num_particles_(num_particles)
+    : num_particles_(num_particles), rng_(42)
 {
     particles_.resize(num_particles_);
 }
@@ -20,15 +21,14 @@ void ParticleFilter::initUniform(const nav_msgs::msg::OccupancyGrid & map)
     double orig_y = map.info.origin.position.y;
 
     // Random number generators
-    std::default_random_engine rng(42);  // 42 = fixed seed, so results are repeatable
     std::uniform_int_distribution<int> rand_col(0, width - 1);
     std::uniform_int_distribution<int> rand_row(0, height - 1);
     std::uniform_real_distribution<double> rand_theta(-M_PI, M_PI);
 
     int placed = 0;
     while (placed < num_particles_) {
-        int col = rand_col(rng);
-        int row = rand_row(rng);
+        int col = rand_col(rng_);
+        int row = rand_row(rng_);
 
         // map.data is a flat array: index = row * width + col
         // value 0 = free, 100 = occupied, -1 = unknown
@@ -40,7 +40,7 @@ void ParticleFilter::initUniform(const nav_msgs::msg::OccupancyGrid & map)
         // Convert grid cell back to world coordinates
         particles_[placed].x     = orig_x + (col + 0.5) * res;
         particles_[placed].y     = orig_y + (row + 0.5) * res;
-        particles_[placed].theta = rand_theta(rng);
+        particles_[placed].theta = rand_theta(rng_);
         particles_[placed].weight = 1.0 / num_particles_;
         placed++;
     }
@@ -140,6 +140,146 @@ void ParticleFilter::sampleMotionModel(
     }
 }
 
+ScanScoreStats ParticleFilter::scoreParticlesWithScan(const sensor_msgs::msg::LaserScan & scan)
+{
+    ScanScoreStats stats;
+    stats.best_score = 0.0;
+    stats.worst_score = std::numeric_limits<double>::max();
+    stats.average_score = 0.0;
+
+    if (likelihood_field_map_.data.empty()) {
+        return stats;
+    }
+
+    const size_t beam_step = 10;
+    double score_sum = 0.0;
+
+    for (auto & p : particles_) {
+        double particle_score = 0.0;
+        int used_beams = 0;
+
+        for (size_t i = 0; i < scan.ranges.size(); i += beam_step) {
+            float range = scan.ranges[i];
+
+            if (!std::isfinite(range) || range < scan.range_min || range > scan.range_max) {
+                continue;
+            }
+
+            double beam_angle = scan.angle_min + static_cast<double>(i) * scan.angle_increment;
+            double hit_x = p.x + range * std::cos(p.theta + beam_angle);
+            double hit_y = p.y + range * std::sin(p.theta + beam_angle);
+
+            particle_score += likelihoodAtWorld(hit_x, hit_y);
+            used_beams++;
+        }
+
+        if (used_beams > 0) {
+            particle_score /= used_beams;
+        }
+
+        p.weight = particle_score;
+        score_sum += particle_score;
+        stats.best_score = std::max(stats.best_score, particle_score);
+        stats.worst_score = std::min(stats.worst_score, particle_score);
+    }
+
+    stats.average_score = score_sum / particles_.size();
+
+    if (stats.worst_score == std::numeric_limits<double>::max()) {
+        stats.worst_score = 0.0;
+    }
+
+    return stats;
+}
+
+void ParticleFilter::resample()
+{
+    double weight_sum = 0.0;
+    for (const auto & p : particles_) {
+        weight_sum += p.weight;
+    }
+
+    if (weight_sum <= 0.0 || !std::isfinite(weight_sum)) {
+        double equal_weight = 1.0 / num_particles_;
+        for (auto & p : particles_) {
+            p.weight = equal_weight;
+        }
+        return;
+    }
+
+    std::vector<double> cumulative_weights;
+    cumulative_weights.reserve(particles_.size());
+    double cumulative_sum = 0.0;
+
+    for (auto & p : particles_) {
+        p.weight /= weight_sum;
+        cumulative_sum += p.weight;
+        cumulative_weights.push_back(cumulative_sum);
+    }
+
+    // Avoid tiny floating-point error, so the final pointer can always find a particle.
+    cumulative_weights.back() = 1.0;
+
+    std::normal_distribution<double> xy_noise(0.0, 0.02);
+    std::normal_distribution<double> theta_noise(0.0, 0.03);
+    std::uniform_real_distribution<double> start_distribution(0.0, 1.0 / num_particles_);
+
+    std::vector<Particle> new_particles;
+    new_particles.reserve(num_particles_);
+
+    double pointer = start_distribution(rng_);
+    double step = 1.0 / num_particles_;
+    size_t particle_index = 0;
+
+    for (int i = 0; i < num_particles_; ++i) {
+        while (pointer > cumulative_weights[particle_index]) {
+            particle_index++;
+        }
+
+        Particle copied = particles_[particle_index];
+
+        copied.x += xy_noise(rng_);
+        copied.y += xy_noise(rng_);
+        copied.theta = normalizeAngle(copied.theta + theta_noise(rng_));
+        copied.weight = 1.0 / num_particles_;
+
+        new_particles.push_back(copied);
+        pointer += step;
+    }
+
+    particles_ = new_particles;
+}
+
+EstimatedPose ParticleFilter::estimatePose() const
+{
+    EstimatedPose pose;
+    pose.x = 0.0;
+    pose.y = 0.0;
+    pose.theta = 0.0;
+
+    if (particles_.empty()) {
+        return pose;
+    }
+
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    double sum_sin = 0.0;
+    double sum_cos = 0.0;
+
+    for (const auto & p : particles_) {
+        sum_x += p.x;
+        sum_y += p.y;
+        sum_sin += std::sin(p.theta);
+        sum_cos += std::cos(p.theta);
+    }
+
+    pose.x = sum_x / particles_.size();
+    pose.y = sum_y / particles_.size();
+    pose.theta = std::atan2(sum_sin, sum_cos);
+
+    return pose;
+}
+
 const std::vector<Particle> & ParticleFilter::getParticles() const
 {
     return particles_;
@@ -148,4 +288,46 @@ const std::vector<Particle> & ParticleFilter::getParticles() const
 const nav_msgs::msg::OccupancyGrid & ParticleFilter::getLikelihoodFieldMap() const
 {
     return likelihood_field_map_;
+}
+
+bool ParticleFilter::worldToLikelihoodMap(double x, double y, int & col, int & row) const
+{
+    if (likelihood_field_map_.data.empty()) {
+        return false;
+    }
+
+    double resolution = likelihood_field_map_.info.resolution;
+    double origin_x = likelihood_field_map_.info.origin.position.x;
+    double origin_y = likelihood_field_map_.info.origin.position.y;
+
+    col = static_cast<int>(std::floor((x - origin_x) / resolution));
+    row = static_cast<int>(std::floor((y - origin_y) / resolution));
+
+    return col >= 0 &&
+        row >= 0 &&
+        col < static_cast<int>(likelihood_field_map_.info.width) &&
+        row < static_cast<int>(likelihood_field_map_.info.height);
+}
+
+double ParticleFilter::likelihoodAtWorld(double x, double y) const
+{
+    int col = 0;
+    int row = 0;
+    if (!worldToLikelihoodMap(x, y, col, row)) {
+        return 0.0;
+    }
+
+    int index = row * likelihood_field_map_.info.width + col;
+    return likelihood_field_map_.data[index] / 100.0;
+}
+
+double ParticleFilter::normalizeAngle(double angle) const
+{
+    while (angle > M_PI) {
+        angle -= 2.0 * M_PI;
+    }
+    while (angle < -M_PI) {
+        angle += 2.0 * M_PI;
+    }
+    return angle;
 }
