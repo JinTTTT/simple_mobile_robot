@@ -185,13 +185,3 @@ The result lets ROS use this standard frame chain:
 ```text
 map -> odom -> base_link
 ```
-
-## Later Improvements
-
-The current version is good for learning and visual testing.
-Later we should improve:
-
-- use effective sample size to decide when resampling is needed
-- improve the laser sensor model
-- publish confidence information, so we know how certain the estimate is
-- add parameters for particle count, beam step, noise, and resampling behavior
