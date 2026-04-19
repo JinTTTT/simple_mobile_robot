@@ -28,18 +28,27 @@ if(BUILD_TESTING)
 endif()
 
 # 1. tell cmake which source file to complile into executable
-add_executable(localization_node 
-  src/localization_node.cpp
+add_executable(particle_filter_localization_node 
+  src/particle_filter_localization_node.cpp
   src/particle_filter.cpp
 )
 
+add_executable(kalman_localization_node
+  src/kalman_localization_node.cpp
+  src/kalman_filter.cpp
+)
+
 # 1. tell cmake where to find header files
-target_include_directories(localization_node PUBLIC
+target_include_directories(particle_filter_localization_node PUBLIC
+  include
+)
+
+target_include_directories(kalman_localization_node PUBLIC
   include
 )
 
 # 2. link dependecies to executable
-ament_target_dependencies(localization_node
+ament_target_dependencies(particle_filter_localization_node
   rclcpp
   sensor_msgs
   nav_msgs
@@ -49,9 +58,19 @@ ament_target_dependencies(localization_node
   tf2_geometry_msgs
 )
 
+ament_target_dependencies(kalman_localization_node
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+
 # 3. copy compile binary to install/ , ros2 run can find it
 install(TARGETS
-  localization_node
+  particle_filter_localization_node
+  kalman_localization_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

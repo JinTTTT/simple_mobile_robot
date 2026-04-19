@@ -16,10 +16,10 @@
 
 #include "localization/particle_filter.hpp"
 
-class LocalizationNode : public rclcpp::Node
+class ParticleFilterLocalizationNode : public rclcpp::Node
 {
 public:
-    LocalizationNode();
+    ParticleFilterLocalizationNode();
 
 private:
     void map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
@@ -58,8 +58,8 @@ private:
     ParticleFilter pf_;
 };
 
-LocalizationNode::LocalizationNode()
-: Node("localization_node"), pf_(500)   // 500 particles
+ParticleFilterLocalizationNode::ParticleFilterLocalizationNode()
+: Node("particle_filter_localization_node"), pf_(500)   // 500 particles
 {
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -71,15 +71,15 @@ LocalizationNode::LocalizationNode()
 
     map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
         "/map", static_map_qos,
-        std::bind(&LocalizationNode::map_callback, this, std::placeholders::_1));
+        std::bind(&ParticleFilterLocalizationNode::map_callback, this, std::placeholders::_1));
 
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
         "/odom", 10,
-        std::bind(&LocalizationNode::odom_callback, this, std::placeholders::_1));
+        std::bind(&ParticleFilterLocalizationNode::odom_callback, this, std::placeholders::_1));
 
     scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
         "/scan", 10,
-        std::bind(&LocalizationNode::scan_callback, this, std::placeholders::_1));
+        std::bind(&ParticleFilterLocalizationNode::scan_callback, this, std::placeholders::_1));
 
     particle_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("/particlecloud", 10);
     estimated_pose_pub_ =
@@ -88,10 +88,10 @@ LocalizationNode::LocalizationNode()
     likelihood_field_pub_ =
         this->create_publisher<nav_msgs::msg::OccupancyGrid>("/likelihood_field", static_map_qos);
 
-    RCLCPP_INFO(this->get_logger(), "LocalizationNode started.");
+    RCLCPP_INFO(this->get_logger(), "ParticleFilterLocalizationNode started.");
 }
 
-void LocalizationNode::map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+void ParticleFilterLocalizationNode::map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
 {
     map_ = *msg;
     map_received_ = true;
@@ -103,7 +103,7 @@ void LocalizationNode::map_callback(const nav_msgs::msg::OccupancyGrid::SharedPt
         msg->info.width, msg->info.height);
 }
 
-void LocalizationNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
+void ParticleFilterLocalizationNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
     if (!map_received_) return;  // wait for map before moving particles
 
@@ -137,7 +137,7 @@ void LocalizationNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr ms
     publish_map_to_odom_tf();
 }
 
-void LocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
+void ParticleFilterLocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
 {
     if (!map_received_) return;
 
@@ -151,7 +151,7 @@ void LocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPt
     publish_map_to_odom_tf();
 }
 
-void LocalizationNode::publish_particles()
+void ParticleFilterLocalizationNode::publish_particles()
 {
     geometry_msgs::msg::PoseArray msg;
     msg.header.stamp    = this->now();
@@ -170,7 +170,7 @@ void LocalizationNode::publish_particles()
     particle_pub_->publish(msg);
 }
 
-void LocalizationNode::publish_estimated_pose()
+void ParticleFilterLocalizationNode::publish_estimated_pose()
 {
     EstimatedPose estimate = pf_.estimatePose();
 
@@ -185,7 +185,7 @@ void LocalizationNode::publish_estimated_pose()
     estimated_pose_pub_->publish(msg);
 }
 
-void LocalizationNode::publish_map_to_odom_tf()
+void ParticleFilterLocalizationNode::publish_map_to_odom_tf()
 {
     EstimatedPose estimate = pf_.estimatePose();
 
@@ -229,7 +229,7 @@ void LocalizationNode::publish_map_to_odom_tf()
 int main(int argc, char ** argv)
 {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<LocalizationNode>();
+    auto node = std::make_shared<ParticleFilterLocalizationNode>();
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;

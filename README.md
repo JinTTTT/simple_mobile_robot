@@ -53,11 +53,11 @@ Simple meaning:
 
 ### `localization`
 
-This package is the completed first localization stage.
+This package contains learning localization nodes.
 
-It runs a first working particle filter localizer.
+It includes a first working particle-filter localizer and a simple Kalman-filter pose tracker.
 
-It reads:
+The particle-filter node reads:
 
 - `/map`
 - `/odom`
@@ -79,6 +79,9 @@ The particle filter:
 - scores particles using laser scans
 - resamples after robot movement
 - publishes the estimated pose and the normal ROS `map -> odom` transform
+
+The Kalman-filter node assumes a known initial pose of `0, 0, 0`.
+It reads `/odom` and publishes `/estimated_pose`, `/estimated_pose_with_covariance`, and `map -> odom`.
 
 ## Quick Start
 
@@ -185,10 +188,10 @@ Activate the lifecycle node:
 ros2 run nav2_util lifecycle_bringup map_server
 ```
 
-### 5. Start localization
+### 5. Start particle-filter localization
 
 ```bash
-ros2 run localization localization_node
+ros2 run localization particle_filter_localization_node
 ```
 
 In RViz:
@@ -206,6 +209,14 @@ The `/estimated_pose` topic shows the current best pose estimate.
 Do not run a static `map -> odom` transform during localization.
 The localization node publishes `map -> odom`.
 
+To run the Kalman-filter node instead:
+
+```bash
+ros2 run localization kalman_localization_node
+```
+
+Do not run both localization nodes at the same time.
+
 ## Project Structure
 
 ```text
@@ -221,7 +232,5 @@ gazebo_ws/
 
 - Simulation works.
 - Mapping works as a basic occupancy grid mapper.
-- Localization first version is complete.
-- Localization uses a particle filter with a likelihood field, laser scan scoring, motion noise, and resampling.
-- Localization publishes `/particlecloud`, `/likelihood_field`, `/estimated_pose`, and `map -> odom`.
-- Future localization improvements can include better scan scoring, confidence output, and more tuning.
+- Localization includes a particle-filter node with likelihood-field scan scoring.
+- Localization includes a simple prediction-only Kalman-filter node with covariance output.
