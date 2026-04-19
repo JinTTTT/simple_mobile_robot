@@ -81,7 +81,9 @@ The particle filter:
 - publishes the estimated pose and the normal ROS `map -> odom` transform
 
 The Kalman-filter node assumes a known initial pose of `0, 0, 0`.
-It reads `/odom` and publishes `/estimated_pose`, `/estimated_pose_with_covariance`, and `map -> odom`.
+It reads `/map`, `/odom`, and `/scan`.
+It publishes `/estimated_pose`, `/estimated_pose_with_covariance`, `/scan_matched_pose`, and `map -> odom`.
+The scan-matched pose is debug output for checking local scan matching before it is used for Kalman correction.
 
 ## Quick Start
 
@@ -215,6 +217,8 @@ To run the Kalman-filter node instead:
 ros2 run localization kalman_localization_node
 ```
 
+For the Kalman-filter node, add `/estimated_pose`, `/estimated_pose_with_covariance`, and `/scan_matched_pose` in RViz.
+
 Do not run both localization nodes at the same time.
 
 ## Project Structure
@@ -233,4 +237,4 @@ gazebo_ws/
 - Simulation works.
 - Mapping works as a basic occupancy grid mapper.
 - Localization includes a particle-filter node with likelihood-field scan scoring.
-- Localization includes a simple prediction-only Kalman-filter node with covariance output.
+- Localization includes a simple prediction-only Kalman-filter node with covariance and scan-matching debug output.

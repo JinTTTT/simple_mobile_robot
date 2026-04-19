@@ -9,7 +9,7 @@ The goal is to estimate where the robot is on a known map.
 The package has two learning localization nodes:
 
 - `particle_filter_localization_node`: a first particle-filter localizer using `/map`, `/odom`, and `/scan`
-- `kalman_localization_node`: a first Kalman-filter pose tracker using `/odom`
+- `kalman_localization_node`: a first Kalman-filter pose tracker using `/odom`, with scan-matching debug output
 
 Do not run both nodes at the same time.
 Both publish `/estimated_pose` and the `map -> odom` transform.
@@ -82,12 +82,15 @@ theta = 0
 
 It subscribes to:
 
+- `/map`
 - `/odom`
+- `/scan`
 
 It publishes:
 
 - `/estimated_pose`
 - `/estimated_pose_with_covariance`
+- `/scan_matched_pose`
 - TF: `map -> odom`
 
 This version is prediction-only.
@@ -97,8 +100,13 @@ It also grows a covariance matrix to show increasing uncertainty as the robot mo
 The covariance grows only when odometry changes more than a small threshold.
 This keeps the covariance from growing while the robot is standing still.
 
-This node does not use `/map` or `/scan` yet.
-It is not global localization.
+The node also runs a first local scan matcher.
+The scan matcher searches around the current Kalman estimate, scores candidate poses against a likelihood field built from `/map`, and publishes the best local match on `/scan_matched_pose`.
+
+This scan-matched pose is not used to correct the Kalman filter yet.
+It is debug output for checking whether scan matching works before adding Kalman correction.
+
+This node is not global localization.
 It is a local pose tracker from a known starting pose.
 
 ## Build
@@ -175,6 +183,7 @@ In RViz, add:
 
 - `/estimated_pose`
 - `/estimated_pose_with_covariance`
+- `/scan_matched_pose`
 
 Do not run the particle-filter node and Kalman-filter node together.
 
