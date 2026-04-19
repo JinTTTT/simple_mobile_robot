@@ -93,8 +93,8 @@ It publishes:
 - `/scan_matched_pose`
 - TF: `map -> odom`
 
-This version is prediction-only.
-It uses odometry deltas to update `[x, y, theta]`.
+This version uses odometry prediction and scan-matching correction.
+Odometry deltas predict `[x, y, theta]`.
 It also grows a covariance matrix to show increasing uncertainty as the robot moves.
 
 The covariance grows only when odometry changes more than a small threshold.
@@ -103,11 +103,13 @@ This keeps the covariance from growing while the robot is standing still.
 The node also runs a first local scan matcher.
 The scan matcher searches around the current Kalman estimate, scores candidate poses against a likelihood field built from `/map`, and publishes the best local match on `/scan_matched_pose`.
 
-This scan-matched pose is not used to correct the Kalman filter yet.
-It is debug output for checking whether scan matching works before adding Kalman correction.
+When the scan-match score is good enough and the matched pose is close enough to the current prediction, the node uses that pose as a Kalman correction measurement.
+This pulls the estimate toward the scan-matched pose and reduces covariance.
 
 This node is not global localization.
 It is a local pose tracker from a known starting pose.
+If odometry becomes very wrong, such as when the robot drives against a wall while odometry still reports motion, the estimate may move outside the scan matcher's local search window.
+In that case, this version may not recover without a future recovery or relocalization strategy.
 
 ## Build
 

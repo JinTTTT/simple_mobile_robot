@@ -33,6 +33,12 @@ private:
     void publish_map_to_odom_tf(
         double odom_x, double odom_y, double odom_theta,
         const rclcpp::Time & stamp);
+    bool should_use_scan_match_correction(
+        const ScanMatchResult & match,
+        const KalmanPose & prediction) const;
+    KalmanFilter::Matrix3x3 scan_match_measurement_covariance() const;
+    double normalize_angle(double angle) const;
+    double square(double value) const;
     geometry_msgs::msg::Quaternion yaw_to_quaternion(double yaw) const;
 
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
@@ -51,6 +57,13 @@ private:
     double last_odom_y_ = 0.0;
     double last_odom_theta_ = 0.0;
     bool odom_initialized_ = false;
+
+    double min_scan_match_score_ = 0.40;
+    double max_correction_translation_ = 0.25;
+    double max_correction_rotation_ = 0.25;
+    double scan_match_std_x_ = 0.08;
+    double scan_match_std_y_ = 0.08;
+    double scan_match_std_theta_ = 0.08;
 };
 
 KalmanLocalizationNode::KalmanLocalizationNode()
@@ -145,6 +158,22 @@ void KalmanLocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::Sh
     }
 
     publish_scan_matched_pose(match);
+
+    if (should_use_scan_match_correction(match, estimate)) {
+        kf_.correctWithPoseMeasurement(
+            match.pose.x,
+            match.pose.y,
+            match.pose.theta,
+            scan_match_measurement_covariance());
+
+        publish_estimated_pose();
+        publish_estimated_pose_with_covariance();
+
+        if (odom_initialized_) {
+            publish_map_to_odom_tf(
+                last_odom_x_, last_odom_y_, last_odom_theta_, msg->header.stamp);
+        }
+    }
 }
 
 void KalmanLocalizationNode::publish_estimated_pose()
@@ -227,6 +256,48 @@ void KalmanLocalizationNode::publish_map_to_odom_tf(
     msg.transform = tf2::toMsg(map_to_odom);
 
     tf_broadcaster_->sendTransform(msg);
+}
+
+bool KalmanLocalizationNode::should_use_scan_match_correction(
+    const ScanMatchResult & match,
+    const KalmanPose & prediction) const
+{
+    if (match.score < min_scan_match_score_) {
+        return false;
+    }
+
+    double dx = match.pose.x - prediction.x;
+    double dy = match.pose.y - prediction.y;
+    double translation_error = std::sqrt(dx * dx + dy * dy);
+    double rotation_error = std::abs(normalize_angle(match.pose.theta - prediction.theta));
+
+    return translation_error <= max_correction_translation_ &&
+        rotation_error <= max_correction_rotation_;
+}
+
+KalmanFilter::Matrix3x3 KalmanLocalizationNode::scan_match_measurement_covariance() const
+{
+    return {
+        square(scan_match_std_x_), 0.0, 0.0,
+        0.0, square(scan_match_std_y_), 0.0,
+        0.0, 0.0, square(scan_match_std_theta_)
+    };
+}
+
+double KalmanLocalizationNode::normalize_angle(double angle) const
+{
+    while (angle > M_PI) {
+        angle -= 2.0 * M_PI;
+    }
+    while (angle < -M_PI) {
+        angle += 2.0 * M_PI;
+    }
+    return angle;
+}
+
+double KalmanLocalizationNode::square(double value) const
+{
+    return value * value;
 }
 
 geometry_msgs::msg::Quaternion KalmanLocalizationNode::yaw_to_quaternion(double yaw) const

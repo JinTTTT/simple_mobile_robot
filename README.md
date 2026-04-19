@@ -83,7 +83,8 @@ The particle filter:
 The Kalman-filter node assumes a known initial pose of `0, 0, 0`.
 It reads `/map`, `/odom`, and `/scan`.
 It publishes `/estimated_pose`, `/estimated_pose_with_covariance`, `/scan_matched_pose`, and `map -> odom`.
-The scan-matched pose is debug output for checking local scan matching before it is used for Kalman correction.
+The scan-matched pose is also used as a Kalman correction measurement when its score and distance gates pass.
+It is a local tracker, so large odometry errors can still make it lose the actual pose.
 
 ## Quick Start
 
@@ -237,4 +238,4 @@ gazebo_ws/
 - Simulation works.
 - Mapping works as a basic occupancy grid mapper.
 - Localization includes a particle-filter node with likelihood-field scan scoring.
-- Localization includes a simple prediction-only Kalman-filter node with covariance and scan-matching debug output.
+- Localization includes a simple Kalman-filter node with odometry prediction, scan-matching correction, and covariance output.

@@ -49,6 +49,46 @@ void KalmanFilter::predictFromOdometry(
     }
 }
 
+void KalmanFilter::correctWithPoseMeasurement(
+    double measured_x, double measured_y, double measured_theta,
+    const Matrix3x3 & measurement_covariance)
+{
+    if (!initialized_) {
+        return;
+    }
+
+    double innovation_x = measured_x - state_.x;
+    double innovation_y = measured_y - state_.y;
+    double innovation_theta = normalizeAngle(measured_theta - state_.theta);
+
+    double innovation[3] = {innovation_x, innovation_y, innovation_theta};
+    int diagonal_indices[3] = {0, 4, 8};
+
+    for (int i = 0; i < 3; ++i) {
+        int index = diagonal_indices[i];
+        double predicted_variance = covariance_[index];
+        double measurement_variance = measurement_covariance[index];
+        double innovation_variance = predicted_variance + measurement_variance;
+
+        if (innovation_variance <= 0.0) {
+            continue;
+        }
+
+        double kalman_gain = predicted_variance / innovation_variance;
+        double correction = kalman_gain * innovation[i];
+
+        if (i == 0) {
+            state_.x += correction;
+        } else if (i == 1) {
+            state_.y += correction;
+        } else {
+            state_.theta = normalizeAngle(state_.theta + correction);
+        }
+
+        covariance_[index] = (1.0 - kalman_gain) * predicted_variance;
+    }
+}
+
 bool KalmanFilter::isInitialized() const
 {
     return initialized_;

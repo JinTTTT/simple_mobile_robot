@@ -37,6 +37,10 @@ public:
         double old_x, double old_y, double old_theta,
         double new_x, double new_y, double new_theta);
 
+    void correctWithPoseMeasurement(
+        double measured_x, double measured_y, double measured_theta,
+        const Matrix3x3 & measurement_covariance);
+
     bool isInitialized() const;
 
     KalmanPose estimatePose() const;
