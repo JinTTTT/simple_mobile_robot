@@ -65,8 +65,12 @@ LocalizationNode::LocalizationNode()
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
+    rclcpp::QoS static_map_qos(1);
+    static_map_qos.transient_local();
+    static_map_qos.reliable();
+
     map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-        "/map", 10,
+        "/map", static_map_qos,
         std::bind(&LocalizationNode::map_callback, this, std::placeholders::_1));
 
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
@@ -81,11 +85,8 @@ LocalizationNode::LocalizationNode()
     estimated_pose_pub_ =
         this->create_publisher<geometry_msgs::msg::PoseStamped>("/estimated_pose", 10);
 
-    rclcpp::QoS map_qos(1);
-    map_qos.transient_local();
-    map_qos.reliable();
     likelihood_field_pub_ =
-        this->create_publisher<nav_msgs::msg::OccupancyGrid>("/likelihood_field", map_qos);
+        this->create_publisher<nav_msgs::msg::OccupancyGrid>("/likelihood_field", static_map_qos);
 
     RCLCPP_INFO(this->get_logger(), "LocalizationNode started.");
 }
@@ -140,7 +141,7 @@ void LocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPt
 {
     if (!map_received_) return;
 
-    ScanScoreStats stats = pf_.scoreParticlesWithScan(*msg);
+    pf_.scoreParticlesWithScan(*msg);
     if (particles_moved_since_last_resample_) {
         pf_.resample();
         particles_moved_since_last_resample_ = false;
@@ -148,15 +149,6 @@ void LocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPt
     publish_particles();
     publish_estimated_pose();
     publish_map_to_odom_tf();
-
-    RCLCPP_INFO_THROTTLE(
-        this->get_logger(),
-        *this->get_clock(),
-        1000,
-        "Scan scores: best=%.3f average=%.3f worst=%.3f",
-        stats.best_score,
-        stats.average_score,
-        stats.worst_score);
 }
 
 void LocalizationNode::publish_particles()
