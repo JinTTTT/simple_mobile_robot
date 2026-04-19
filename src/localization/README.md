@@ -6,7 +6,17 @@ The goal is to estimate where the robot is on a known map.
 
 ## Current Situation
 
-The package has a first particle filter.
+The package has two learning localization nodes:
+
+- `particle_filter_localization_node`: a first particle-filter localizer using `/map`, `/odom`, and `/scan`
+- `kalman_localization_node`: a first Kalman-filter pose tracker using `/odom`
+
+Do not run both nodes at the same time.
+Both publish `/estimated_pose` and the `map -> odom` transform.
+
+## Particle Filter Node
+
+The particle-filter node is the first map-based localization version.
 
 Right now it can:
 
@@ -21,12 +31,11 @@ Right now it can:
 - publish one estimated robot pose on `/estimated_pose`
 - publish the `map -> odom` transform
 
-So this is now a working first particle-filter localization version.
 It can localize visually in RViz and publish the normal ROS localization TF.
 
-## Topics
+### Particle Filter Topics
 
-The localization node subscribes to:
+The particle-filter node subscribes to:
 
 - `/map`
 - `/odom`
@@ -59,6 +68,38 @@ Together they form:
 ```text
 map -> odom -> base_link
 ```
+
+## Kalman Filter Node
+
+The Kalman-filter node is a simpler learning version.
+It assumes the robot starts from a known initial pose:
+
+```text
+x = 0
+y = 0
+theta = 0
+```
+
+It subscribes to:
+
+- `/odom`
+
+It publishes:
+
+- `/estimated_pose`
+- `/estimated_pose_with_covariance`
+- TF: `map -> odom`
+
+This version is prediction-only.
+It uses odometry deltas to update `[x, y, theta]`.
+It also grows a covariance matrix to show increasing uncertainty as the robot moves.
+
+The covariance grows only when odometry changes more than a small threshold.
+This keeps the covariance from growing while the robot is standing still.
+
+This node does not use `/map` or `/scan` yet.
+It is not global localization.
+It is a local pose tracker from a known starting pose.
 
 ## Build
 
@@ -102,14 +143,14 @@ Terminal 5:
 ros2 run nav2_util lifecycle_bringup map_server
 ```
 
-Terminal 6:
+Terminal 6, particle-filter localization:
 
 ```bash
-ros2 run localization localization_node
+ros2 run localization particle_filter_localization_node
 ```
 
 Do not run the old static `map -> odom` transform.
-The localization node now publishes `map -> odom`.
+The localization node publishes `map -> odom`.
 If two nodes publish the same transform, TF can become confused.
 
 In RViz:
@@ -123,6 +164,19 @@ In RViz:
 Then drive the robot with teleop.
 You should see the particles move and converge near the robot.
 You should also see `/estimated_pose` near the center of the particle cloud.
+
+To run the Kalman-filter node instead:
+
+```bash
+ros2 run localization kalman_localization_node
+```
+
+In RViz, add:
+
+- `/estimated_pose`
+- `/estimated_pose_with_covariance`
+
+Do not run the particle-filter node and Kalman-filter node together.
 
 ## How It Works
 
