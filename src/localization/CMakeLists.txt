@@ -36,6 +36,7 @@ add_executable(particle_filter_localization_node
 add_executable(kalman_localization_node
   src/kalman_localization_node.cpp
   src/kalman_filter.cpp
+  src/scan_matcher.cpp
 )
 
 # 1. tell cmake where to find header files
@@ -60,6 +61,7 @@ ament_target_dependencies(particle_filter_localization_node
 
 ament_target_dependencies(kalman_localization_node
   rclcpp
+  sensor_msgs
   nav_msgs
   geometry_msgs
   tf2
