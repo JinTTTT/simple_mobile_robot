@@ -28,10 +28,12 @@ or:
 ros2 launch slam simple_slam.launch.py
 ```
 
-This is Stage 1 and Stage 2:
+This currently includes Stage 1 through Stage 4:
 
 - Stage 1: build a live occupancy grid map from lidar scans
 - Stage 2: use local scan matching to slightly correct the odometry pose before updating the map
+- Stage 3: store and publish the estimated trajectory
+- Stage 4: detect simple loop closures
 
 The current algorithm is:
 
@@ -43,7 +45,10 @@ The current algorithm is:
 6. If scan matching has a good enough score, use the scan-matched pose.
 7. Otherwise, use the odometry-predicted pose.
 8. Insert the lidar scan into the map using the chosen pose.
-9. Publish the map, estimated pose, scan-matched pose, and `map -> odom`.
+9. Add the estimated pose to the trajectory.
+10. Save occasional keyframes.
+11. Compare the current scan with old nearby keyframes to detect loop closure.
+12. Publish the map, estimated pose, scan-matched pose, trajectory, loop-closure pose, and `map -> odom`.
 
 In short:
 
@@ -67,6 +72,8 @@ The node publishes:
 - `/map`: the occupancy grid map being built live
 - `/estimated_pose`: the final SLAM pose estimate in the `map` frame
 - `/scan_matched_pose`: the pose found by scan matching when scan matching is accepted
+- `/trajectory`: the history of estimated robot poses as a `nav_msgs/Path`
+- `/loop_closure_pose`: the old keyframe pose matched when a loop closure is detected
 - TF: `map -> odom`
 
 Gazebo already publishes:
@@ -130,18 +137,28 @@ correct pose with scan matching
 update the map with the corrected pose
 ```
 
+This package also adds new learning methods:
+
+- keyframes: saved poses plus a small summary of the laser scan
+- trajectory history: all estimated poses published as a path
+- loop-closure detection: checking whether the robot has returned near an older keyframe with a similar scan
+
+The loop-closure stage is detection only. It does not correct the map yet.
+
 ## Terminal Output
 
 The node prints a small throttled summary while scans are integrated:
 
 ```text
-SLAM integrated=... stationary_skipped=... pose=(x, y, theta) match=yes/no score=... occupied=...
+SLAM integrated=... stationary_skipped=... keyframes=... loops=... pose=(x, y, theta) match=yes/no score=... occupied=...
 ```
 
 Meaning:
 
 - `integrated`: scans inserted into the map
 - `stationary_skipped`: scans ignored because the robot did not move enough
+- `keyframes`: saved keyframes for loop-closure checks
+- `loops`: detected loop closures
 - `pose`: current estimated pose
 - `match`: whether scan matching corrected the pose
 - `score`: scan matching score
@@ -151,31 +168,20 @@ When the robot is not moving, scan matching and map updates are skipped after th
 
 ## Current Limits
 
-This is not full SLAM yet.
+This is still not full SLAM yet.
 
 Current limits:
 
-- no loop closure
 - no pose graph
 - no graph optimization
 - no global relocalization
 - no map rebuilding after old pose corrections
+- loop closure is detection only and does not fix the map yet
 - tuning values are still hard-coded
 
-It can correct small odometry errors, but it cannot fix large drift yet.
+It can correct small odometry errors and detect some returns to old places, but it cannot fix large drift yet.
 
 ## Future Stages
-
-Stage 3: store trajectory history.
-
-- save past robot poses
-- publish the robot path
-- make it easier to see drift over time
-
-Stage 4: detect loop closure.
-
-- notice when the robot returns to a place it has seen before
-- compare current scans with old map areas or old scans
 
 Stage 5: pose graph optimization.
 
@@ -228,6 +234,10 @@ In RViz:
 - add `/map`
 - add `/estimated_pose`
 - add `/scan_matched_pose`
+- add `/trajectory`
+- add `/loop_closure_pose`
 - add `TF`
 
 Drive slowly at first. The map should grow around the robot.
+To test loop closure, drive a simple loop and return near an older place.
+When the detector finds a match, the terminal should print `Loop closure detected`, and `/loop_closure_pose` should point to the older matched keyframe.

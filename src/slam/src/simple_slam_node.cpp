@@ -2,6 +2,7 @@
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 
 #include "rclcpp/rclcpp.hpp"
@@ -32,6 +33,13 @@ struct ScanMatchResult
     bool used_scan_matching = false;
 };
 
+struct KeyFrame
+{
+    Pose2D pose;
+    std::vector<float> scan_signature;
+    int scan_index = 0;
+};
+
 class SimpleSlamNode : public rclcpp::Node
 {
 public:
@@ -52,6 +60,17 @@ private:
     void publishEstimatedPose(const rclcpp::Time & stamp);
     void publishScanMatchedPose(const Pose2D & pose, const rclcpp::Time & stamp);
     void publishMapToOdomTf(const rclcpp::Time & stamp);
+    void updateTrajectory(const rclcpp::Time & stamp);
+    void publishLoopClosurePose(const Pose2D & pose, const rclcpp::Time & stamp);
+
+    bool shouldAddKeyFrame() const;
+    void addKeyFrame(const sensor_msgs::msg::LaserScan & scan);
+    bool detectLoopClosure(const sensor_msgs::msg::LaserScan & scan, const rclcpp::Time & stamp);
+    std::vector<float> makeScanSignature(const sensor_msgs::msg::LaserScan & scan) const;
+    double scanSignatureDifference(
+        const std::vector<float> & first,
+        const std::vector<float> & second) const;
+    double poseDistance(const Pose2D & first, const Pose2D & second) const;
 
     Pose2D odomMsgToPose(const nav_msgs::msg::Odometry & msg) const;
     Pose2D applyOdomDeltaToSlamPose(const Pose2D & old_odom, const Pose2D & new_odom) const;
@@ -69,17 +88,23 @@ private:
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr estimated_pose_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr scan_matched_pose_pub_;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr trajectory_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr loop_closure_pose_pub_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     nav_msgs::msg::OccupancyGrid map_msg_;
     nav_msgs::msg::OccupancyGrid likelihood_field_msg_;
+    nav_msgs::msg::Path trajectory_msg_;
     std::vector<double> map_log_odds_;
+    std::vector<KeyFrame> keyframes_;
 
     Pose2D slam_pose_;
     Pose2D last_odom_pose_;
     Pose2D current_odom_pose_;
+    Pose2D last_keyframe_pose_;
     bool odom_initialized_ = false;
     bool scan_received_ = false;
+    bool keyframe_initialized_ = false;
 
     double resolution_ = 0.05;
     int width_ = 500;
@@ -106,8 +131,19 @@ private:
     double min_update_translation_ = 0.01;
     double min_update_rotation_ = 0.01;
 
+    double keyframe_min_translation_ = 0.25;
+    double keyframe_min_rotation_ = 0.25;
+    std::size_t scan_signature_beam_step_ = 20;
+    int min_loop_closure_keyframe_age_ = 20;
+    double loop_closure_search_radius_ = 0.45;
+    double loop_closure_max_heading_diff_ = 0.70;
+    double loop_closure_max_signature_diff_ = 0.18;
+    int min_loop_closure_scan_gap_ = 20;
+
     int scans_integrated_ = 0;
     int stationary_scans_skipped_ = 0;
+    int loop_closure_count_ = 0;
+    int last_loop_closure_scan_ = -100000;
 };
 
 SimpleSlamNode::SimpleSlamNode()
@@ -127,13 +163,16 @@ SimpleSlamNode::SimpleSlamNode()
         this->create_publisher<geometry_msgs::msg::PoseStamped>("/estimated_pose", 10);
     scan_matched_pose_pub_ =
         this->create_publisher<geometry_msgs::msg::PoseStamped>("/scan_matched_pose", 10);
+    trajectory_pub_ = this->create_publisher<nav_msgs::msg::Path>("/trajectory", 10);
+    loop_closure_pose_pub_ =
+        this->create_publisher<geometry_msgs::msg::PoseStamped>("/loop_closure_pose", 10);
 
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     RCLCPP_INFO(this->get_logger(), "Simple SLAM node started.");
     RCLCPP_INFO(
         this->get_logger(),
-        "Inputs: /odom, /scan. Outputs: /map, /estimated_pose, /scan_matched_pose, TF map->odom.");
+        "Inputs: /odom, /scan. Outputs: /map, /estimated_pose, /scan_matched_pose, /trajectory, /loop_closure_pose, TF map->odom.");
 }
 
 void SimpleSlamNode::initializeMap()
@@ -154,6 +193,8 @@ void SimpleSlamNode::initializeMap()
 
     likelihood_field_msg_ = map_msg_;
     likelihood_field_msg_.data.assign(width_ * height_, 0);
+
+    trajectory_msg_.header.frame_id = "map";
 }
 
 void SimpleSlamNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -202,14 +243,21 @@ void SimpleSlamNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
     scan_received_ = true;
     scans_integrated_++;
     likelihood_field_dirty_ = true;
+    updateTrajectory(msg->header.stamp);
+    detectLoopClosure(*msg, msg->header.stamp);
+    if (shouldAddKeyFrame()) {
+        addKeyFrame(*msg);
+    }
 
     RCLCPP_INFO_THROTTLE(
         this->get_logger(),
         *this->get_clock(),
         5000,
-        "SLAM integrated=%d stationary_skipped=%d pose=(%.2f, %.2f, %.2f) match=%s score=%.3f occupied=%d",
+        "SLAM integrated=%d stationary_skipped=%d keyframes=%zu loops=%d pose=(%.2f, %.2f, %.2f) match=%s score=%.3f occupied=%d",
         scans_integrated_,
         stationary_scans_skipped_,
+        keyframes_.size(),
+        loop_closure_count_,
         slam_pose_.x,
         slam_pose_.y,
         slam_pose_.theta,
@@ -519,6 +567,160 @@ void SimpleSlamNode::publishMapToOdomTf(const rclcpp::Time & stamp)
     msg.child_frame_id = "odom";
     msg.transform = tf2::toMsg(map_to_odom);
     tf_broadcaster_->sendTransform(msg);
+}
+
+void SimpleSlamNode::updateTrajectory(const rclcpp::Time & stamp)
+{
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header.stamp = stamp;
+    pose.header.frame_id = "map";
+    pose.pose.position.x = slam_pose_.x;
+    pose.pose.position.y = slam_pose_.y;
+    pose.pose.orientation = yawToQuaternion(slam_pose_.theta);
+
+    trajectory_msg_.header.stamp = stamp;
+    trajectory_msg_.poses.push_back(pose);
+    trajectory_pub_->publish(trajectory_msg_);
+}
+
+void SimpleSlamNode::publishLoopClosurePose(const Pose2D & pose, const rclcpp::Time & stamp)
+{
+    geometry_msgs::msg::PoseStamped msg;
+    msg.header.stamp = stamp;
+    msg.header.frame_id = "map";
+    msg.pose.position.x = pose.x;
+    msg.pose.position.y = pose.y;
+    msg.pose.orientation = yawToQuaternion(pose.theta);
+    loop_closure_pose_pub_->publish(msg);
+}
+
+bool SimpleSlamNode::shouldAddKeyFrame() const
+{
+    if (!keyframe_initialized_) {
+        return true;
+    }
+
+    double distance = poseDistance(slam_pose_, last_keyframe_pose_);
+    double rotation = std::abs(normalizeAngle(slam_pose_.theta - last_keyframe_pose_.theta));
+
+    return distance >= keyframe_min_translation_ || rotation >= keyframe_min_rotation_;
+}
+
+void SimpleSlamNode::addKeyFrame(const sensor_msgs::msg::LaserScan & scan)
+{
+    KeyFrame keyframe;
+    keyframe.pose = slam_pose_;
+    keyframe.scan_signature = makeScanSignature(scan);
+    keyframe.scan_index = scans_integrated_;
+
+    keyframes_.push_back(keyframe);
+    last_keyframe_pose_ = slam_pose_;
+    keyframe_initialized_ = true;
+}
+
+bool SimpleSlamNode::detectLoopClosure(
+    const sensor_msgs::msg::LaserScan & scan, const rclcpp::Time & stamp)
+{
+    if (keyframes_.size() <= static_cast<std::size_t>(min_loop_closure_keyframe_age_)) {
+        return false;
+    }
+
+    if (scans_integrated_ - last_loop_closure_scan_ < min_loop_closure_scan_gap_) {
+        return false;
+    }
+
+    std::vector<float> current_signature = makeScanSignature(scan);
+    double best_difference = std::numeric_limits<double>::max();
+    std::size_t best_index = 0;
+    bool found_candidate = false;
+
+    for (std::size_t i = 0; i < keyframes_.size(); ++i) {
+        const KeyFrame & keyframe = keyframes_[i];
+        int keyframe_age = scans_integrated_ - keyframe.scan_index;
+        if (keyframe_age < min_loop_closure_keyframe_age_) {
+            continue;
+        }
+
+        double distance = poseDistance(slam_pose_, keyframe.pose);
+        if (distance > loop_closure_search_radius_) {
+            continue;
+        }
+
+        double heading_difference = std::abs(normalizeAngle(slam_pose_.theta - keyframe.pose.theta));
+        if (heading_difference > loop_closure_max_heading_diff_) {
+            continue;
+        }
+
+        double signature_difference =
+            scanSignatureDifference(current_signature, keyframe.scan_signature);
+        if (signature_difference < best_difference) {
+            best_difference = signature_difference;
+            best_index = i;
+            found_candidate = true;
+        }
+    }
+
+    if (!found_candidate || best_difference > loop_closure_max_signature_diff_) {
+        return false;
+    }
+
+    loop_closure_count_++;
+    last_loop_closure_scan_ = scans_integrated_;
+    const KeyFrame & matched_keyframe = keyframes_[best_index];
+    publishLoopClosurePose(matched_keyframe.pose, stamp);
+
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Loop closure detected: current_scan=%d matched_keyframe=%zu old_scan=%d signature_diff=%.3f",
+        scans_integrated_,
+        best_index,
+        matched_keyframe.scan_index,
+        best_difference);
+
+    return true;
+}
+
+std::vector<float> SimpleSlamNode::makeScanSignature(
+    const sensor_msgs::msg::LaserScan & scan) const
+{
+    std::vector<float> signature;
+    signature.reserve(scan.ranges.size() / scan_signature_beam_step_ + 1);
+
+    for (std::size_t i = 0; i < scan.ranges.size(); i += scan_signature_beam_step_) {
+        float range = scan.ranges[i];
+        if (!std::isfinite(range) || range < scan.range_min) {
+            range = scan.range_max;
+        }
+
+        range = std::min(range, scan.range_max);
+        signature.push_back(range / scan.range_max);
+    }
+
+    return signature;
+}
+
+double SimpleSlamNode::scanSignatureDifference(
+    const std::vector<float> & first,
+    const std::vector<float> & second) const
+{
+    std::size_t count = std::min(first.size(), second.size());
+    if (count == 0) {
+        return std::numeric_limits<double>::max();
+    }
+
+    double difference_sum = 0.0;
+    for (std::size_t i = 0; i < count; ++i) {
+        difference_sum += std::abs(first[i] - second[i]);
+    }
+
+    return difference_sum / count;
+}
+
+double SimpleSlamNode::poseDistance(const Pose2D & first, const Pose2D & second) const
+{
+    double dx = first.x - second.x;
+    double dy = first.y - second.y;
+    return std::sqrt(dx * dx + dy * dy);
 }
 
 Pose2D SimpleSlamNode::odomMsgToPose(const nav_msgs::msg::Odometry & msg) const
