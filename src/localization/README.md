@@ -14,17 +14,7 @@ The localization package estimates where the robot is in the map and publishes `
 ## Assumptions
 
 This package assumes:
-
 - a prebuilt global occupancy grid map is available
-- the map is published on `/map`
-- the robot publishes odometry on `/odom`
-- the robot publishes lidar scans on `/scan`
-- the simulation publishes TF or odometry data for `odom -> base_link`
-- only one localization node publishes `map -> odom`
-
-Do not run a static `map -> odom` transform at the same time as localization.
-Do not run the particle-filter node and Kalman-filter node together.
-If two nodes publish the same transform, TF can become inconsistent.
 
 ## Localization Approaches
 
@@ -33,10 +23,10 @@ This package implements two localization algorithms:
 - particle filter localization
 - Kalman filter localization
 
-The particle filter is a global localization approach.
+The particle filter is a global localization approach. It will be better if the initial pose is unknown or the robot gets lost.
 It can start with particles spread across the free space of the map.
 
-The Kalman filter is a local pose tracker.
+The Kalman filter is a local pose tracker. It will be better if the initial pose is close to the actual pose and the robot does not get lost.The localization will be more smooth than the particle filter, but it can lose track if the odometry error grows too large or if the scan matcher fails to find a good local match.
 It assumes the robot starts near the known initial pose `x=0`, `y=0`, `theta=0`.
 
 ## Particle Filter Localization

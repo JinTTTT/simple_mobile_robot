@@ -1,56 +1,162 @@
 # Simulation Package
 
-This package runs the robot simulation.
+This package starts the robot in Gazebo and bridges the simulation data into ROS 2.
 
-It uses Gazebo to create:
+The main goal is to provide a repeatable test environment for mapping and localization.
+The simulated robot publishes the same kinds of data a real mobile robot would publish: odometry, lidar scans, and TF.
 
-- a simple differential drive robot
-- a 2D lidar
-- a world for the robot to drive in
-- ROS 2 topics for movement and sensor data
+## Assumptions
 
-## What It Publishes
+This package assumes:
 
-The simulation and bridge publish:
+- Gazebo Sim is installed
+- `ros_gz_sim` and `ros_gz_bridge` are available
+- the robot is controlled through `/cmd_vel`
+- mapping and localization will use `/scan`, `/odom`, and `/tf`
 
-- `/odom`
-- `/scan`
-- `/tf`
+The simulation is the first package to start.
+Mapping and localization depend on its sensor and transform topics.
 
-## What It Reads
+## Simulation Components
 
-The robot reads:
+This package contains:
 
-- `/cmd_vel`
+- a Gazebo world
+- a simple room model
+- a differential-drive robot URDF
+- launch files for spawning the robot
+- a ROS-Gazebo bridge for command and sensor topics
 
-`/cmd_vel` is the velocity command.
-For example, teleop publishes to `/cmd_vel` when you press the keyboard.
-
-## Build
-
-From the workspace root:
-
-```bash
-cd ~/workspace/gazebo_ws
-colcon build --symlink-install
-source install/setup.bash
-```
-
-## Run
-
-Start the simulation:
+The main launch file is:
 
 ```bash
 ros2 launch simulation bringup_simulation.launch.py
 ```
 
-In another terminal, start keyboard control:
+It starts Gazebo, spawns the robot, publishes the robot description, and starts the bridge.
+
+## Robot And World
+
+The robot is a small differential-drive mobile robot.
+It has:
+
+- left and right drive wheels
+- a simple base body
+- a 2D lidar
+- Gazebo plugins for movement and sensors
+
+The world contains the room used for mapping and localization tests.
+The mapping package can also generate a saved PGM map from the room model.
+
+## Interfaces
+
+The simulation reads:
+
+- `/cmd_vel`: `geometry_msgs/msg/Twist`
+
+The simulation publishes:
+
+- `/odom`: `nav_msgs/msg/Odometry`
+- `/scan`: `sensor_msgs/msg/LaserScan`
+- `/tf`: `tf2_msgs/msg/TFMessage`
+
+`/cmd_vel` is the velocity command topic.
+Keyboard teleop publishes to this topic when you press movement keys.
+
+`/odom` gives the robot motion estimate in the odometry frame.
+The mapping package uses this through TF.
+The localization package uses it as motion input.
+
+`/scan` gives the 2D lidar measurements.
+Mapping uses it to update the occupancy grid.
+Localization uses it to compare the robot pose against the known map.
+
+## Characteristics
+
+Advantages:
+
+- gives a repeatable robot test environment
+- provides odometry, lidar, and TF without real hardware
+- works with standard ROS 2 topics
+- supports keyboard teleop through `/cmd_vel`
+- can be used by mapping and localization at the same time
+
+Disadvantages:
+
+- sensor data is idealized compared with a real robot
+- robot physics may not match real hardware
+- environment changes require editing Gazebo model or world files
+- launch and bridge settings are currently hard-coded
+
+## Important Files
+
+Main files:
+
+- `launch/bringup_simulation.launch.py`: starts the full simulation and bridge
+- `launch/spawn_robot.launch.py`: starts Gazebo, robot state publisher, and robot spawning
+- `urdf/my_robot.urdf`: robot model
+- `worlds/my_world.sdf`: Gazebo world
+- `models/simple_room/model.sdf`: room model used by the world and map generator
+
+The `bringup_simulation.launch.py` file includes `spawn_robot.launch.py`.
+It then starts `ros_gz_bridge` with bridges for `/cmd_vel`, `/odom`, `/tf`, and `/scan`.
+
+## Parameters
+
+This package does not declare ROS parameters yet.
+The important values are configured in launch, URDF, SDF, and bridge files:
+
+- robot spawn pose: `x=0.0`, `y=0.0`, `z=0.5`
+- robot name in Gazebo: `my_first_robot`
+- command topic: `/cmd_vel`
+- odometry topic: `/odom`
+- lidar topic: `/scan`
+- TF topic: `/tf`
+- world file: `worlds/my_world.sdf`
+
+Potential future ROS parameters or launch arguments:
+
+- `world`
+- `robot_name`
+- `spawn_x`
+- `spawn_y`
+- `spawn_z`
+- `use_rviz`
+- `bridge_cmd_vel`
+- `bridge_odom`
+- `bridge_scan`
+
+## Run And Control
+
+Build the package from the workspace root:
+
+```bash
+cd ~/workspace/gazebo_ws
+colcon build --packages-select simulation --symlink-install
+source install/setup.bash
+```
+
+Open a new terminal for each command below.
+In each terminal, source the workspace first:
+
+```bash
+cd ~/workspace/gazebo_ws
+source install/setup.bash
+```
+
+Start simulation:
+
+```bash
+ros2 launch simulation bringup_simulation.launch.py
+```
+
+Start keyboard control:
 
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
-Useful keys:
+Useful teleop keys:
 
 - `i`: move forward
 - `,`: move backward
@@ -58,7 +164,7 @@ Useful keys:
 - `l`: turn right
 - `k`: stop
 
-## View in RViz
+## Visualize
 
 Start RViz:
 
@@ -66,17 +172,55 @@ Start RViz:
 rviz2
 ```
 
-For only simulation, use:
+For simulation only:
 
-- Fixed Frame: `odom`
-- Add `TF`
-- Add `Odometry`
+- set Fixed Frame to `odom`
+- add `TF`
+- add `Odometry`
+- add `/scan`
 
 For mapping or localization, the fixed frame is usually `map`.
 
-## Important Idea
+## Use With Other Packages
 
-Simulation gives fake sensor data.
+For mapping:
 
-This is useful because we can test mapping and localization without a real robot.
-The code can subscribe to `/scan` and `/odom` just like it would on a real robot.
+```bash
+ros2 run mapping occupancy_mapper
+```
+
+The mapper reads `/scan` and TF from the simulation and publishes `/map`.
+
+For localization:
+
+```bash
+ros2 run localization particle_filter_localization_node
+```
+
+or:
+
+```bash
+ros2 run localization kalman_localization_node
+```
+
+The localization nodes read `/odom`, `/scan`, and `/map`.
+They publish the estimated robot pose and the `map -> odom` transform.
+
+## Existing Issues and Future Improvements
+
+Current issues:
+
+- launch arguments are hard-coded
+- the robot and world are simple learning models
+- simulated sensor noise is limited
+- the bridge topic list is fixed in the launch file
+- RViz is started manually
+
+Potential improvements:
+
+- add launch arguments for world file and spawn pose
+- add optional RViz launch support
+- add configurable sensor noise
+- add more realistic robot dimensions and dynamics
+- add more test worlds for mapping and localization
+- add a single bringup launch for simulation, mapping, localization, and RViz

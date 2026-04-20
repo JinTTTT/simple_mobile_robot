@@ -1,53 +1,121 @@
 # Mapping Package
 
-This package builds a 2D occupancy grid map.
+This package builds and provides 2D occupancy grid maps.
 
-An occupancy grid is a map made of small square cells.
-Each cell means one of these ideas:
+The main goal is to turn lidar scans and robot motion into a map that other packages can use later.
+Localization uses the saved map from this package as its prebuilt global map.
 
-- free space
-- occupied space
-- unknown space
+## Assumptions
 
-## Current Mapper
+This package assumes:
 
-The main node is:
+- the robot publishes lidar scans on `/scan`
+- the simulation publishes TF from `odom` to `base_link`
+- odometry is good enough for a first mapping version
+- the world is mostly static while mapping
 
-```bash
-ros2 run mapping occupancy_mapper
-```
+The live mapper does not do SLAM.
+It uses odometry as the robot pose estimate and updates one occupancy grid.
 
-It subscribes to:
+## Mapping Approaches
 
-- `/scan`
-- TF from `odom` to `base_link`
+This package has two map sources:
 
-It publishes:
+- live occupancy grid mapping from `/scan` and TF
+- generated PGM map from the simulation SDF world
 
-- `/map`
+The live mapper is useful for learning how occupancy grid mapping works.
+The generated PGM map is cleaner and is currently better for localization testing.
 
-## How It Works
+## Live Occupancy Grid Mapper
+
+The live mapper creates a 2D grid around the robot.
+Each cell stores the belief that the cell is occupied.
 
 For each laser beam:
 
-1. The cells before the laser hit are probably free.
-2. The cell at the laser hit is probably occupied.
-3. The map updates those cells again and again.
+- cells before the laser endpoint become more likely to be free
+- the endpoint cell becomes more likely to be occupied
+- repeated scans make the map more confident
 
-The code uses two main ideas:
+### Interfaces
 
-- Bresenham ray tracing
-- log-odds probability updates
+The mapper node subscribes to:
+
+- `/scan`: `sensor_msgs/msg/LaserScan`
+- TF: `odom -> base_link`
+
+It publishes:
+
+- `/map`: `nav_msgs/msg/OccupancyGrid`
+
+The `/map` publisher uses transient local QoS.
+Late subscribers such as RViz or map saving tools can receive the latest map after connecting.
+
+### Characteristics
+
+Advantages:
+
+- simple and easy to inspect
+- uses standard ROS 2 map message type
+- publishes a live map that can be visualized in RViz
+- uses log-odds updates, so repeated evidence accumulates naturally
+
+Disadvantages:
+
+- depends directly on odometry accuracy
+- has no loop closure
+- has no map optimization
+- does not correct robot pose drift
+- dynamic obstacles can leave incorrect marks in the map
+
+### Important Methods
+
+The current implementation uses:
+
+- TF lookup from `odom` to `base_link`
+- world-to-grid coordinate conversion
+- Bresenham ray tracing for each laser beam
+- log-odds updates for free and occupied cells
+- probability conversion before publishing `/map`
 
 Bresenham ray tracing finds all grid cells along a line.
-Here, the line is one lidar beam.
+Here, the line is one lidar beam from the robot to the measured endpoint.
 
-Log-odds is a math trick.
-It makes it easier to increase or decrease the belief that a cell is occupied.
+Log-odds is used because it makes occupancy updates easy to add over time.
+Free-space evidence decreases the cell value.
+Hit evidence increases the cell value.
 
-## Build
+### Parameters
 
-From the workspace root:
+The mapper does not declare ROS parameters yet.
+The important values are hard-coded in the source:
+
+- map resolution: `0.05 m`
+- map width: `500 cells`
+- map height: `500 cells`
+- map origin: centered around `(0, 0)`
+- publish period: `500 ms`
+- occupied hit probability: `0.90`
+- free hit probability: `0.05`
+- log-odds clamp: `-10.0` to `10.0`
+
+Potential future ROS parameters:
+
+- `resolution`
+- `width`
+- `height`
+- `origin_x`
+- `origin_y`
+- `publish_rate`
+- `hit_probability`
+- `free_probability`
+- `log_odds_min`
+- `log_odds_max`
+
+### Run and Visualize
+
+Build the package from the workspace root:
 
 ```bash
 cd ~/workspace/gazebo_ws
@@ -55,27 +123,33 @@ colcon build --packages-select mapping
 source install/setup.bash
 ```
 
-## Run With Simulation
+Open a new terminal for each command below.
+In each terminal, source the workspace first:
 
-Terminal 1:
+```bash
+cd ~/workspace/gazebo_ws
+source install/setup.bash
+```
+
+Start simulation:
 
 ```bash
 ros2 launch simulation bringup_simulation.launch.py
 ```
 
-Terminal 2:
+Start teleop:
 
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
-Terminal 3:
+Start the mapper:
 
 ```bash
 ros2 run mapping occupancy_mapper
 ```
 
-Terminal 4:
+Start RViz:
 
 ```bash
 rviz2
@@ -84,9 +158,19 @@ rviz2
 In RViz:
 
 - set Fixed Frame to `map`
-- add the `/map` topic
+- add `/map`
 
-## Saved Map For Localization
+During mapping, RViz needs a transform between `map` and `odom`.
+For this first mapper, `map` and `odom` can be treated as the same frame:
+
+```bash
+ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map odom
+```
+
+Do not use this static transform while running localization.
+Localization publishes the real `map -> odom` transform.
+
+## Generated Map For Localization
 
 The package also contains a saved map:
 
@@ -95,14 +179,11 @@ src/mapping/maps/maze_map.yaml
 src/mapping/maps/maze_map.pgm
 ```
 
-This saved map is used by the localization package.
+This map is used by the localization package.
+The `.pgm` file stores the map image.
+The `.yaml` file stores the map metadata used by `nav2_map_server`.
 
-## Generate PGM Map For Localization
-
-The map generated by `occupancy_mapper` is not good enough for localization yet.
-So this package also has a script that generates a PGM map from the SDF world.
-
-### 1. Generate a map from the SDF file
+### Generate The PGM Map
 
 From the workspace root:
 
@@ -111,19 +192,19 @@ cd ~/workspace/gazebo_ws/src/mapping/scripts
 python3 generate_pgm_map.py
 ```
 
-It will generate `maze_map.pgm` in the `maps` folder.
+The script reads:
 
-The `.pgm` file is the image of the map.
-The `.yaml` file is the interface file used by `map_server`.
+```text
+src/simulation/models/simple_room/model.sdf
+```
 
-The current map files are:
+It writes:
 
 ```text
 src/mapping/maps/maze_map.pgm
-src/mapping/maps/maze_map.yaml
 ```
 
-### 2. Publish the map with map server
+### Publish The Saved Map
 
 Start the map server:
 
@@ -131,22 +212,35 @@ Start the map server:
 ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=src/mapping/maps/maze_map.yaml
 ```
 
-Activate it:
+Activate the lifecycle node:
 
 ```bash
 ros2 run nav2_util lifecycle_bringup map_server
 ```
 
-If RViz cannot display the map because TF is missing, use this temporary transform:
+In RViz:
 
-```bash
-ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map odom
-```
+- set Fixed Frame to `map`
+- add `/map`
 
-## Current Limits
+## Existing Issues and Future Improvements
 
-- The mapper trusts odometry.
-- There is no loop closure.
-- There is no map optimization.
-- Removed obstacles are not handled well.
-- The generated live map is good for learning, but the saved PGM map is better for current localization testing.
+Current issues:
+
+- live mapping trusts odometry
+- there is no loop closure
+- there is no map optimization
+- moving or removed obstacles are not handled well
+- mapper tuning values are hard-coded
+- the launch file currently provides the static `map -> odom` transform but does not start `occupancy_mapper`
+- the generated PGM map is better than the live map for current localization testing
+
+Potential improvements:
+
+- add ROS parameters for map size, resolution, update probabilities, and publish rate
+- add a launch file that starts simulation, static TF, mapper, and RViz together
+- add a map saving workflow for the live mapper
+- add filtering for invalid or noisy scan beams
+- add dynamic obstacle handling
+- add SLAM-style pose correction or loop closure
+- add tests for world-to-grid conversion, Bresenham ray tracing, and log-odds updates
