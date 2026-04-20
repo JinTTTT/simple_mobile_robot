@@ -68,6 +68,7 @@ private:
     bool shouldAddKeyFrame() const;
     void addKeyFrame(const sensor_msgs::msg::LaserScan & scan);
     bool detectLoopClosure(const rclcpp::Time & stamp);
+    bool shouldApplyLoopClosureCorrection(std::size_t old_index, std::size_t current_index) const;
     void applyLoopClosureCorrection(std::size_t old_index, std::size_t current_index);
     std::vector<float> makeScanSignature(const sensor_msgs::msg::LaserScan & scan) const;
     double scanSignatureDifference(
@@ -144,11 +145,18 @@ private:
     double loop_closure_max_heading_diff_ = 0.70;
     double loop_closure_max_signature_diff_ = 0.18;
     int min_loop_closure_scan_gap_ = 20;
+    int min_correction_scan_gap_ = 80;
+    std::size_t min_correction_keyframe_gap_ = 12;
+    std::size_t min_old_keyframe_separation_for_correction_ = 8;
+    double loop_closure_correction_strength_ = 0.35;
 
     int scans_integrated_ = 0;
     int stationary_scans_skipped_ = 0;
     int loop_closure_count_ = 0;
+    int loop_closure_correction_count_ = 0;
     int last_loop_closure_scan_ = -100000;
+    int last_correction_scan_ = -100000;
+    std::size_t last_corrected_old_keyframe_ = std::numeric_limits<std::size_t>::max();
 };
 
 SimpleSlamNode::SimpleSlamNode()
@@ -262,11 +270,12 @@ void SimpleSlamNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
         this->get_logger(),
         *this->get_clock(),
         5000,
-        "SLAM integrated=%d stationary_skipped=%d keyframes=%zu loops=%d pose=(%.2f, %.2f, %.2f) match=%s score=%.3f occupied=%d",
+        "SLAM integrated=%d stationary_skipped=%d keyframes=%zu loops=%d corrections=%d pose=(%.2f, %.2f, %.2f) match=%s score=%.3f occupied=%d",
         scans_integrated_,
         stationary_scans_skipped_,
         keyframes_.size(),
         loop_closure_count_,
+        loop_closure_correction_count_,
         slam_pose_.x,
         slam_pose_.y,
         slam_pose_.theta,
@@ -698,17 +707,52 @@ bool SimpleSlamNode::detectLoopClosure(const rclcpp::Time & stamp)
     last_loop_closure_scan_ = scans_integrated_;
     const KeyFrame & matched_keyframe = keyframes_[best_index];
     publishLoopClosurePose(matched_keyframe.pose, stamp);
-    applyLoopClosureCorrection(best_index, current_index);
-    publishCorrectedTrajectory(stamp);
+
+    bool correction_applied = false;
+    if (shouldApplyLoopClosureCorrection(best_index, current_index)) {
+        applyLoopClosureCorrection(best_index, current_index);
+        publishCorrectedTrajectory(stamp);
+        correction_applied = true;
+    }
 
     RCLCPP_INFO(
         this->get_logger(),
-        "Loop closure detected: current_scan=%d current_keyframe=%zu matched_keyframe=%zu old_scan=%d signature_diff=%.3f",
+        "Loop closure detected: current_scan=%d current_keyframe=%zu matched_keyframe=%zu old_scan=%d signature_diff=%.3f correction=%s",
         scans_integrated_,
         current_index,
         best_index,
         matched_keyframe.scan_index,
-        best_difference);
+        best_difference,
+        correction_applied ? "applied" : "skipped");
+
+    return true;
+}
+
+bool SimpleSlamNode::shouldApplyLoopClosureCorrection(
+    std::size_t old_index, std::size_t current_index) const
+{
+    if (current_index <= old_index) {
+        return false;
+    }
+
+    if (current_index - old_index < min_correction_keyframe_gap_) {
+        return false;
+    }
+
+    if (scans_integrated_ - last_correction_scan_ < min_correction_scan_gap_) {
+        return false;
+    }
+
+    if (last_corrected_old_keyframe_ != std::numeric_limits<std::size_t>::max()) {
+        std::size_t separation =
+            old_index > last_corrected_old_keyframe_ ?
+            old_index - last_corrected_old_keyframe_ :
+            last_corrected_old_keyframe_ - old_index;
+
+        if (separation < min_old_keyframe_separation_for_correction_) {
+            return false;
+        }
+    }
 
     return true;
 }
@@ -723,9 +767,10 @@ void SimpleSlamNode::applyLoopClosureCorrection(
     const Pose2D old_pose = keyframes_[old_index].corrected_pose;
     const Pose2D current_pose = keyframes_[current_index].corrected_pose;
 
-    double error_x = old_pose.x - current_pose.x;
-    double error_y = old_pose.y - current_pose.y;
-    double error_theta = normalizeAngle(old_pose.theta - current_pose.theta);
+    double error_x = loop_closure_correction_strength_ * (old_pose.x - current_pose.x);
+    double error_y = loop_closure_correction_strength_ * (old_pose.y - current_pose.y);
+    double error_theta =
+        loop_closure_correction_strength_ * normalizeAngle(old_pose.theta - current_pose.theta);
     double span = static_cast<double>(current_index - old_index);
 
     for (std::size_t i = old_index + 1; i <= current_index; ++i) {
@@ -735,6 +780,10 @@ void SimpleSlamNode::applyLoopClosureCorrection(
         keyframes_[i].corrected_pose.theta =
             normalizeAngle(keyframes_[i].corrected_pose.theta + fraction * error_theta);
     }
+
+    loop_closure_correction_count_++;
+    last_correction_scan_ = scans_integrated_;
+    last_corrected_old_keyframe_ = old_index;
 }
 
 std::vector<float> SimpleSlamNode::makeScanSignature(

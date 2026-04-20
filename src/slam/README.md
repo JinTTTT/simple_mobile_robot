@@ -145,7 +145,7 @@ This package also adds new learning methods:
 - keyframes: saved poses plus a small summary of the laser scan
 - trajectory history: all estimated poses published as a path
 - loop-closure detection: checking whether the robot has returned near an older keyframe with a similar scan
-- simple loop-closure correction: spreading the error evenly between the old matched keyframe and the current keyframe
+- simple loop-closure correction: gently spreading part of the error between selected loop-closure keyframes
 
 The correction is intentionally simple. It corrects the published keyframe trajectory, not the live robot pose and not the map.
 
@@ -163,7 +163,21 @@ the node computes the difference:
 error = old corrected pose - current corrected pose
 ```
 
-Then it spreads that error across the keyframes from the old keyframe to the current keyframe.
+The node does not correct every detected loop closure. After returning to a known area, many scans may match old places. Correcting every one of those matches can make the corrected path zigzag.
+
+So the node applies correction only when:
+
+- enough scans passed since the last correction
+- the old and current keyframes are far enough apart
+- the matched old keyframe is not too close to the previously corrected old keyframe
+
+When correction is accepted, the node applies only part of the error:
+
+```text
+used_error = 0.35 * full_error
+```
+
+Then it spreads that smaller error across the keyframes from the old keyframe to the current keyframe.
 
 Example:
 
@@ -176,16 +190,16 @@ The correction is applied like this:
 
 - keyframe 4 gets 0% correction
 - keyframe 12 gets about 50% correction
-- keyframe 20 gets 100% correction
+- keyframe 20 gets 100% of the selected correction
 
-This bends the corrected keyframe path toward the old place. It is not a full graph optimizer, but it shows the main idea of using loop closure to repair drift.
+This bends the corrected keyframe path toward the old place without yanking it too hard. It is not a full graph optimizer, but it shows the main idea of using loop closure to repair drift.
 
 ## Terminal Output
 
 The node prints a small throttled summary while scans are integrated:
 
 ```text
-SLAM integrated=... stationary_skipped=... keyframes=... loops=... pose=(x, y, theta) match=yes/no score=... occupied=...
+SLAM integrated=... stationary_skipped=... keyframes=... loops=... corrections=... pose=(x, y, theta) match=yes/no score=... occupied=...
 ```
 
 Meaning:
@@ -194,6 +208,7 @@ Meaning:
 - `stationary_skipped`: scans ignored because the robot did not move enough
 - `keyframes`: saved keyframes for loop-closure checks
 - `loops`: detected loop closures
+- `corrections`: loop closures that actually changed `/corrected_trajectory`
 - `pose`: current estimated pose
 - `match`: whether scan matching corrected the pose
 - `score`: scan matching score
@@ -211,6 +226,7 @@ Current limits:
 - no nonlinear graph optimization
 - no global relocalization
 - no map rebuilding after old pose corrections
+- loop closure correction is gated and partial, so some drift may remain
 - loop closure corrects only `/corrected_trajectory`, not `/map`
 - tuning values are still hard-coded
 
