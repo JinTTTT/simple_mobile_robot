@@ -4,15 +4,12 @@ This repo is my place to learn the full software stack of a mobile robot.
 
 The long term goal is to learn:
 
-- simulation
-- mapping
-- localization
-- SLAM
-- planning
-- navigation
-
-The first localization stage is now complete.
-The repo has a working particle-filter localizer on a saved map.
+- simulation: finished
+- mapping: finished
+- localization : finished
+- SLAM : in progress
+- planning : in planning
+- navigation : in planning
 
 ## Packages
 
@@ -43,7 +40,9 @@ It publishes:
 
 - `/map`
 
-The mapper uses Bresenham ray tracing and log-odds updates.
+The mapper uses Bresenham ray tracing to detect the cells along the laser beam. Use log-odds to update the map.
+
+It only use odom as a rough guess of the robot pose.
 
 Simple meaning:
 
@@ -55,7 +54,11 @@ Simple meaning:
 
 This package contains learning localization nodes.
 
-It includes a first working particle-filter localizer and a simple Kalman-filter pose tracker.
+It assumes a saved global occupancy grid map is available.
+It includes two localization approaches:
+
+- particle filter localization
+- Kalman filter localization
 
 The particle-filter node reads:
 
@@ -70,8 +73,7 @@ It publishes:
 - `/estimated_pose`
 - TF: `map -> odom`
 
-It uses the saved map, odometry, and laser scans to estimate the robot pose.
-The particle filter:
+Simple logic:
 
 - starts particles on free map cells
 - builds a likelihood field from the map
@@ -191,10 +193,18 @@ Activate the lifecycle node:
 ros2 run nav2_util lifecycle_bringup map_server
 ```
 
-### 5. Start particle-filter localization
+### 5. Start localization
+
+Option 1: particle-filter localization
 
 ```bash
 ros2 run localization particle_filter_localization_node
+```
+
+Option 2: Kalman-filter localization
+
+```bash
+ros2 run localization kalman_localization_node
 ```
 
 In RViz:
@@ -212,12 +222,6 @@ The `/estimated_pose` topic shows the current best pose estimate.
 Do not run a static `map -> odom` transform during localization.
 The localization node publishes `map -> odom`.
 
-To run the Kalman-filter node instead:
-
-```bash
-ros2 run localization kalman_localization_node
-```
-
 For the Kalman-filter node, add `/estimated_pose`, `/estimated_pose_with_covariance`, and `/scan_matched_pose` in RViz.
 
 Do not run both localization nodes at the same time.
@@ -233,7 +237,7 @@ gazebo_ws/
     └── localization/
 ```
 
-## Current Status
+## Current Issues and Future Improvements
 
 - Simulation works.
 - Mapping works as a basic occupancy grid mapper.

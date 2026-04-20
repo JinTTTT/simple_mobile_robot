@@ -1,119 +1,149 @@
 # Localization Package
 
-This package is the current learning stage of the repo.
+This package estimates the robot pose in a known map.
 
-The goal is to estimate where the robot is on a known map.
-
-## Current Situation
-
-The package has two learning localization nodes:
-
-- `particle_filter_localization_node`: a first particle-filter localizer using `/map`, `/odom`, and `/scan`
-- `kalman_localization_node`: a first Kalman-filter pose tracker using `/odom`, with scan-matching debug output
-
-Do not run both nodes at the same time.
-Both publish `/estimated_pose` and the `map -> odom` transform.
-
-## Particle Filter Node
-
-The particle-filter node is the first map-based localization version.
-
-Right now it can:
-
-- read a map from `/map`
-- build and publish a likelihood field on `/likelihood_field`
-- create 500 particles on free map cells
-- read odometry from `/odom`
-- move the particles when the robot moves
-- use `/scan` to score particles
-- resample particles using stochastic universal resampling
-- publish particles on `/particlecloud`
-- publish one estimated robot pose on `/estimated_pose`
-- publish the `map -> odom` transform
-
-It can localize visually in RViz and publish the normal ROS localization TF.
-
-### Particle Filter Topics
-
-The particle-filter node subscribes to:
-
-- `/map`
-- `/odom`
-- `/scan`
-
-It publishes:
-
-- `/particlecloud`
-- `/likelihood_field`
-- `/estimated_pose`
-- TF: `map -> odom`
-
-`/particlecloud` is a `PoseArray`.
-In RViz, each pose is drawn as one arrow.
-Each arrow means one possible robot position and direction.
-
-`/likelihood_field` is an `OccupancyGrid`.
-It shows where laser hits are likely.
-Cells near walls have high values.
-Cells far from walls have low values.
-
-`/estimated_pose` is a `PoseStamped`.
-It is one pose calculated from the particle cloud.
-This is the package's current best guess of the robot pose.
-
-The `map -> odom` transform connects the global map frame to the odometry frame.
-Gazebo already publishes `odom -> base_link`.
-Together they form:
+The main goal is to connect the robot's local odometry frame to the global map frame:
 
 ```text
 map -> odom -> base_link
 ```
 
-## Kalman Filter Node
+Gazebo publishes `odom -> base_link`.
+The localization package estimates where the robot is in the map and publishes `map -> odom`.
 
-The Kalman-filter node is a simpler learning version.
-It assumes the robot starts from a known initial pose:
+## Assumptions
 
-```text
-x = 0
-y = 0
-theta = 0
-```
+This package assumes:
 
-It subscribes to:
+- a prebuilt global occupancy grid map is available
+- the map is published on `/map`
+- the robot publishes odometry on `/odom`
+- the robot publishes lidar scans on `/scan`
+- the simulation publishes TF or odometry data for `odom -> base_link`
+- only one localization node publishes `map -> odom`
 
-- `/map`
-- `/odom`
-- `/scan`
+Do not run a static `map -> odom` transform at the same time as localization.
+Do not run the particle-filter node and Kalman-filter node together.
+If two nodes publish the same transform, TF can become inconsistent.
+
+## Localization Approaches
+
+This package implements two localization algorithms:
+
+- particle filter localization
+- Kalman filter localization
+
+The particle filter is a global localization approach.
+It can start with particles spread across the free space of the map.
+
+The Kalman filter is a local pose tracker.
+It assumes the robot starts near the known initial pose `x=0`, `y=0`, `theta=0`.
+
+## Particle Filter Localization
+
+The particle filter represents the robot pose with many weighted pose guesses.
+Each particle is one possible robot position and heading in the map.
+
+At startup, particles are sampled on free map cells.
+As the robot moves, odometry moves every particle with noise.
+When a scan arrives, each particle is scored by checking whether laser hits land near occupied map cells.
+Better particles get higher weights.
+The filter then resamples so good pose guesses survive and bad pose guesses disappear.
+
+### Interfaces
+
+The particle-filter node subscribes to:
+
+- `/map`: `nav_msgs/msg/OccupancyGrid`
+- `/odom`: `nav_msgs/msg/Odometry`
+- `/scan`: `sensor_msgs/msg/LaserScan`
 
 It publishes:
 
-- `/estimated_pose`
-- `/estimated_pose_with_covariance`
-- `/scan_matched_pose`
+- `/particlecloud`: `geometry_msgs/msg/PoseArray`
+- `/likelihood_field`: `nav_msgs/msg/OccupancyGrid`
+- `/estimated_pose`: `geometry_msgs/msg/PoseStamped`
 - TF: `map -> odom`
 
-This version uses odometry prediction and scan-matching correction.
-Odometry deltas predict `[x, y, theta]`.
-It also grows a covariance matrix to show increasing uncertainty as the robot moves.
+`/particlecloud` shows all particles in the map frame.
+In RViz, each pose is drawn as one arrow.
 
-The covariance grows only when odometry changes more than a small threshold.
-This keeps the covariance from growing while the robot is standing still.
+`/likelihood_field` shows how close each map cell is to an occupied cell.
+Cells near walls have high values.
+Cells far from walls have low values.
 
-The node also runs a first local scan matcher.
-The scan matcher searches around the current Kalman estimate, scores candidate poses against a likelihood field built from `/map`, and publishes the best local match on `/scan_matched_pose`.
+`/estimated_pose` is the current best pose estimate from the particle cloud.
 
-When the scan-match score is good enough and the matched pose is close enough to the current prediction, the node uses that pose as a Kalman correction measurement.
-This pulls the estimate toward the scan-matched pose and reduces covariance.
+### Characteristics
 
-This node is not global localization.
-It is a local pose tracker from a known starting pose.
-If odometry becomes very wrong, such as when the robot drives against a wall while odometry still reports motion, the estimate may move outside the scan matcher's local search window.
-In that case, this version may not recover without a future recovery or relocalization strategy.
+Advantages:
 
-## Build
+- can localize globally because particles can start anywhere in free space
+- can represent multiple pose hypotheses before convergence
+- works well when the initial robot pose is unknown
+- is easy to visualize in RViz through `/particlecloud`
 
-From the workspace root:
+Disadvantages:
+
+- needs enough particles to cover the map
+- can be slower than a Kalman filter
+- can lose accuracy if the likelihood model is too simple
+- may converge to a wrong pose in symmetric environments
+- parameters are currently hard-coded instead of exposed as ROS parameters
+
+### Important Methods
+
+The current implementation uses:
+
+- uniform initialization on free map cells
+- likelihood field construction from the occupancy grid map
+- odometry motion model with sampled translation and rotation noise
+- scan likelihood scoring using every 10th laser beam
+- stochastic universal resampling
+- pose averaging with sine and cosine for heading
+
+Stochastic universal resampling is also called low-variance resampling.
+It walks through the normalized particle weights with evenly spaced pointers.
+This keeps more copies of high-weight particles while reducing random sampling noise.
+
+The estimated heading is averaged with `sin(theta)` and `cos(theta)`.
+This avoids the angle wraparound problem where `179 degrees` and `-179 degrees` are almost the same direction but a normal average would be wrong.
+
+The node publishes `map -> odom` with:
+
+```text
+map_to_odom = map_to_base_link * inverse(odom_to_base_link)
+```
+
+`map_to_base_link` comes from the particle filter estimate.
+`odom_to_base_link` comes from TF.
+
+### Parameters
+
+The particle-filter node does not declare ROS parameters yet.
+The important values are hard-coded in the source:
+
+- particle count: `500`
+- random seed: `42`
+- maximum likelihood field distance: `1.0 m`
+- scan beam step: `10`
+- movement threshold before motion update: `0.001`
+- resampling position noise: `0.02 m`
+- resampling heading noise: `0.03 rad`
+
+Potential future ROS parameters:
+
+- `num_particles`
+- `scan_beam_step`
+- `max_likelihood_distance`
+- `translation_noise`
+- `rotation_noise`
+- `resample_xy_noise`
+- `resample_theta_noise`
+
+### Run and Visualize
+
+Build the package from the workspace root:
 
 ```bash
 cd ~/workspace/gazebo_ws
@@ -121,47 +151,49 @@ colcon build --packages-select localization
 source install/setup.bash
 ```
 
-## Run
+Open a new terminal for each command below.
+In each terminal, source the workspace first:
 
-Terminal 1:
+```bash
+cd ~/workspace/gazebo_ws
+source install/setup.bash
+```
+
+Start simulation:
 
 ```bash
 ros2 launch simulation bringup_simulation.launch.py
 ```
 
-Terminal 2:
+Start teleop:
 
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
 
-Terminal 3:
+Start RViz:
 
 ```bash
 rviz2
 ```
 
-Terminal 4:
+Publish the saved map:
 
 ```bash
 ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=src/mapping/maps/maze_map.yaml
 ```
 
-Terminal 5:
+Activate the map server:
 
 ```bash
 ros2 run nav2_util lifecycle_bringup map_server
 ```
 
-Terminal 6, particle-filter localization:
+Start particle-filter localization:
 
 ```bash
 ros2 run localization particle_filter_localization_node
 ```
-
-Do not run the old static `map -> odom` transform.
-The localization node publishes `map -> odom`.
-If two nodes publish the same transform, TF can become confused.
 
 In RViz:
 
@@ -171,82 +203,146 @@ In RViz:
 - add `/particlecloud`
 - add `/estimated_pose`
 
-Then drive the robot with teleop.
-You should see the particles move and converge near the robot.
-You should also see `/estimated_pose` near the center of the particle cloud.
+Drive the robot with teleop.
+The particles should move with odometry and gradually concentrate near the robot pose.
 
-To run the Kalman-filter node instead:
+## Kalman Filter Localization
+
+The Kalman filter estimates the robot pose as one state with uncertainty.
+Instead of keeping many particles, it keeps a mean pose and covariance.
+
+This implementation uses odometry prediction and local scan-matching correction.
+The scan matcher searches around the current Kalman estimate, scores candidate poses against a likelihood field built from `/map`, and publishes the best local match.
+When the scan match score is high enough and the matched pose is close enough to the current prediction, the matched pose is used as a Kalman correction measurement.
+
+This is not global localization.
+It is a local tracker from the known initial pose `0, 0, 0`.
+
+### Interfaces
+
+The Kalman-filter node subscribes to:
+
+- `/map`: `nav_msgs/msg/OccupancyGrid`
+- `/odom`: `nav_msgs/msg/Odometry`
+- `/scan`: `sensor_msgs/msg/LaserScan`
+
+It publishes:
+
+- `/estimated_pose`: `geometry_msgs/msg/PoseStamped`
+- `/estimated_pose_with_covariance`: `geometry_msgs/msg/PoseWithCovarianceStamped`
+- `/scan_matched_pose`: `geometry_msgs/msg/PoseStamped`
+- TF: `map -> odom`
+
+### Characteristics
+
+Advantages:
+
+- computationally cheaper than a particle filter
+- directly represents pose uncertainty with covariance
+- can be smooth and stable when the initial pose is good
+- uses scan matching to correct odometry drift
+- publishes `/scan_matched_pose` for debugging the correction source
+
+Disadvantages:
+
+- does not naturally represent multiple possible poses
+- depends strongly on a reasonable initial pose
+- can fail in ambiguous or highly nonlinear cases
+- is only a local tracker, not a global relocalizer
+- can lose the actual pose if odometry error grows outside the scan matcher search window
+- parameters are currently hard-coded instead of exposed as ROS parameters
+
+### Important Methods
+
+The current implementation uses:
+
+- initial pose setup at `x=0`, `y=0`, `theta=0`
+- odometry-based prediction for `[x, y, theta]`
+- covariance growth from process noise when the robot moves
+- likelihood field construction from the occupancy grid map
+- local scan matching around the current Kalman estimate
+- scan-match gating by score, translation distance, and rotation distance
+- Kalman correction with the accepted scan-matched pose
+- covariance publishing in `/estimated_pose_with_covariance`
+
+The scan matcher searches around the current estimate with a small grid of candidate poses.
+Each candidate pose is scored by projecting selected scan beams into the likelihood field.
+The best valid candidate is published on `/scan_matched_pose`.
+
+### Parameters
+
+The Kalman-filter node does not declare ROS parameters yet.
+The important values are hard-coded in the source:
+
+- initial pose: `x=0`, `y=0`, `theta=0`
+- initial standard deviations: `0.02`, `0.02`, `0.02`
+- base process standard deviations: `0.005`, `0.005`, `0.002`
+- distance noise scale: `0.10`
+- rotation noise scale: `0.10`
+- minimum odometry update deltas: `0.001 m`, `0.001 rad`
+- scan matcher search range: `0.20 m`, `0.20 rad`
+- scan matcher search step: `0.05 m`, `0.05 rad`
+- scan matcher beam step: `10`
+- scan matcher likelihood distance: `1.0 m`
+- minimum scan match score for correction: `0.40`
+- maximum correction distance: `0.25 m`
+- maximum correction rotation: `0.25 rad`
+- scan match measurement standard deviations: `0.08`, `0.08`, `0.08`
+
+Potential future ROS parameters:
+
+- `initial_pose`
+- `initial_covariance`
+- `process_noise`
+- `scan_match_search_range`
+- `scan_match_search_step`
+- `scan_match_min_score`
+- `max_correction_translation`
+- `max_correction_rotation`
+- `scan_match_measurement_noise`
+
+### Run and Visualize
+
+Use the same simulation, teleop, RViz, and map-server setup from the particle-filter run section.
+Then start Kalman-filter localization:
 
 ```bash
 ros2 run localization kalman_localization_node
 ```
 
-In RViz, add:
+In RViz:
 
-- `/estimated_pose`
-- `/estimated_pose_with_covariance`
-- `/scan_matched_pose`
+- set Fixed Frame to `map`
+- add `/map`
+- add `/estimated_pose`
+- add `/estimated_pose_with_covariance`
+- add `/scan_matched_pose`
 
-Do not run the particle-filter node and Kalman-filter node together.
+The `/estimated_pose` topic shows the Kalman estimate.
+The `/estimated_pose_with_covariance` topic shows the estimate with uncertainty.
+The `/scan_matched_pose` topic shows the best local scan-matching pose before gating.
 
-## How It Works
+## Existing Issues and Future Improvements
 
-A particle is one guess about the robot pose.
+Current issues:
 
-A pose means:
+- both localization nodes publish `/estimated_pose` and `map -> odom`, so they cannot run together
+- particle-filter tuning values are hard-coded
+- Kalman-filter and scan-matcher tuning values are hard-coded
+- the particle filter uses a simple likelihood field sensor model
+- the particle filter estimate is a simple average and does not publish covariance
+- the Kalman filter assumes the initial pose is already close to the real pose
+- the Kalman filter can lose track if the scan match is outside the local search window
+- global localization can still fail in symmetric map areas
+- the particle cloud can collapse too much after repeated resampling
 
-- x position
-- y position
-- heading angle
+Potential improvements:
 
-At startup, the node puts particles randomly on free map cells.
-This means: "the robot could be anywhere free."
-
-When odometry says the robot moved, every particle moves too.
-This means: "if the robot moved forward, every guess should move forward."
-The motion model adds small random noise.
-This means particles do not all move in exactly the same way.
-That is useful because real odometry is not perfect.
-
-When a laser scan arrives, each particle gets a score.
-The score asks:
-
-"If the robot were at this particle, would the laser hits land near walls?"
-
-Good particles get higher scores.
-Bad particles get lower scores.
-
-After scoring, resampling keeps more good particles and removes more bad particles.
-This package uses stochastic universal resampling.
-This is also called low-variance resampling.
-The node only resamples after odometry has moved the particles.
-This avoids repeatedly shrinking the particle cloud while the robot is standing still.
-
-The node also publishes `/estimated_pose`.
-It averages the particle positions.
-For the heading angle, it averages `sin(theta)` and `cos(theta)`.
-This avoids a common angle problem.
-
-Example:
-
-- `179 degrees`
-- `-179 degrees`
-
-These are almost the same direction.
-A normal average would give the wrong answer.
-The sine/cosine average handles this better.
-
-The node also publishes `map -> odom`.
-The idea is:
-
-```text
-map_to_odom = map_to_base_link * inverse(odom_to_base_link)
-```
-
-`map_to_base_link` comes from the particle filter estimate.
-`odom_to_base_link` comes from Gazebo odometry TF.
-The result lets ROS use this standard frame chain:
-
-```text
-map -> odom -> base_link
-```
+- add ROS parameters for particle filter, Kalman filter, and scan matcher tuning
+- add launch files for particle-filter and Kalman-filter localization
+- publish covariance for the particle-filter estimate
+- improve scan scoring with a stronger probabilistic sensor model
+- add confidence output for both localization algorithms
+- add recovery behavior when localization confidence is low
+- add global relocalization or particle-filter reset behavior
+- add tests for map indexing, likelihood lookup, resampling, angle averaging, covariance updates, and scan matching
