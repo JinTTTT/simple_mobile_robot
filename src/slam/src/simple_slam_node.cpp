@@ -33,11 +33,21 @@ struct ScanMatchResult
     bool used_scan_matching = false;
 };
 
+struct StoredScan
+{
+    std::vector<float> ranges;
+    float angle_min = 0.0F;
+    float angle_increment = 0.0F;
+    float range_min = 0.0F;
+    float range_max = 0.0F;
+};
+
 struct KeyFrame
 {
     Pose2D pose;
     Pose2D corrected_pose;
     std::vector<float> scan_signature;
+    StoredScan scan;
     int scan_index = 0;
 };
 
@@ -57,7 +67,13 @@ private:
     double likelihoodAtWorld(double x, double y) const;
 
     void updateMapWithScan(const sensor_msgs::msg::LaserScan & scan, const Pose2D & pose);
+    void insertScanIntoLogOddsMap(
+        const StoredScan & scan,
+        const Pose2D & pose,
+        std::vector<double> & log_odds_map);
+    void rebuildCorrectedMap(const rclcpp::Time & stamp);
     void publishMap();
+    void publishCorrectedMap(const rclcpp::Time & stamp);
     void publishEstimatedPose(const rclcpp::Time & stamp);
     void publishScanMatchedPose(const Pose2D & pose, const rclcpp::Time & stamp);
     void publishMapToOdomTf(const rclcpp::Time & stamp);
@@ -70,6 +86,7 @@ private:
     bool detectLoopClosure(const rclcpp::Time & stamp);
     bool shouldApplyLoopClosureCorrection(std::size_t old_index, std::size_t current_index) const;
     void applyLoopClosureCorrection(std::size_t old_index, std::size_t current_index);
+    StoredScan makeStoredScan(const sensor_msgs::msg::LaserScan & scan) const;
     std::vector<float> makeScanSignature(const sensor_msgs::msg::LaserScan & scan) const;
     double scanSignatureDifference(
         const std::vector<float> & first,
@@ -90,6 +107,7 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_pub_;
+    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr corrected_map_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr estimated_pose_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr scan_matched_pose_pub_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr trajectory_pub_;
@@ -98,10 +116,12 @@ private:
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     nav_msgs::msg::OccupancyGrid map_msg_;
+    nav_msgs::msg::OccupancyGrid corrected_map_msg_;
     nav_msgs::msg::OccupancyGrid likelihood_field_msg_;
     nav_msgs::msg::Path trajectory_msg_;
     nav_msgs::msg::Path corrected_trajectory_msg_;
     std::vector<double> map_log_odds_;
+    std::vector<double> corrected_map_log_odds_;
     std::vector<KeyFrame> keyframes_;
 
     Pose2D slam_pose_;
@@ -172,6 +192,8 @@ SimpleSlamNode::SimpleSlamNode()
 
     auto map_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
     map_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("/map", map_qos);
+    corrected_map_pub_ =
+        this->create_publisher<nav_msgs::msg::OccupancyGrid>("/corrected_map", map_qos);
     estimated_pose_pub_ =
         this->create_publisher<geometry_msgs::msg::PoseStamped>("/estimated_pose", 10);
     scan_matched_pose_pub_ =
@@ -187,7 +209,7 @@ SimpleSlamNode::SimpleSlamNode()
     RCLCPP_INFO(this->get_logger(), "Simple SLAM node started.");
     RCLCPP_INFO(
         this->get_logger(),
-        "Inputs: /odom, /scan. Outputs: /map, /estimated_pose, /scan_matched_pose, /trajectory, /corrected_trajectory, /loop_closure_pose, TF map->odom.");
+        "Inputs: /odom, /scan. Outputs: /map, /corrected_map, /estimated_pose, /scan_matched_pose, /trajectory, /corrected_trajectory, /loop_closure_pose, TF map->odom.");
 }
 
 void SimpleSlamNode::initializeMap()
@@ -196,6 +218,7 @@ void SimpleSlamNode::initializeMap()
     origin_y_ = -height_ * resolution_ / 2.0;
 
     map_log_odds_.assign(width_ * height_, 0.0);
+    corrected_map_log_odds_.assign(width_ * height_, 0.0);
 
     map_msg_.header.frame_id = "map";
     map_msg_.info.resolution = resolution_;
@@ -205,6 +228,7 @@ void SimpleSlamNode::initializeMap()
     map_msg_.info.origin.position.y = origin_y_;
     map_msg_.info.origin.orientation.w = 1.0;
     map_msg_.data.assign(width_ * height_, -1);
+    corrected_map_msg_ = map_msg_;
 
     likelihood_field_msg_ = map_msg_;
     likelihood_field_msg_.data.assign(width_ * height_, 0);
@@ -470,6 +494,14 @@ double SimpleSlamNode::likelihoodAtWorld(double x, double y) const
 void SimpleSlamNode::updateMapWithScan(
     const sensor_msgs::msg::LaserScan & scan, const Pose2D & pose)
 {
+    insertScanIntoLogOddsMap(makeStoredScan(scan), pose, map_log_odds_);
+}
+
+void SimpleSlamNode::insertScanIntoLogOddsMap(
+    const StoredScan & scan,
+    const Pose2D & pose,
+    std::vector<double> & log_odds_map)
+{
     int robot_grid_x = 0;
     int robot_grid_y = 0;
     worldToGrid(pose.x, pose.y, robot_grid_x, robot_grid_y);
@@ -507,14 +539,28 @@ void SimpleSlamNode::updateMapWithScan(
             int x = cells[cell_index].first;
             int y = cells[cell_index].second;
             int index = y * width_ + x;
-            map_log_odds_[index] =
-                clamp(map_log_odds_[index] + log_odds_free_, log_odds_min_, log_odds_max_);
+            log_odds_map[index] =
+                clamp(log_odds_map[index] + log_odds_free_, log_odds_min_, log_odds_max_);
         }
 
         int hit_index = cells.back().second * width_ + cells.back().first;
-        map_log_odds_[hit_index] =
-            clamp(map_log_odds_[hit_index] + log_odds_hit_, log_odds_min_, log_odds_max_);
+        log_odds_map[hit_index] =
+            clamp(log_odds_map[hit_index] + log_odds_hit_, log_odds_min_, log_odds_max_);
     }
+}
+
+void SimpleSlamNode::rebuildCorrectedMap(const rclcpp::Time & stamp)
+{
+    corrected_map_log_odds_.assign(width_ * height_, 0.0);
+
+    for (const auto & keyframe : keyframes_) {
+        insertScanIntoLogOddsMap(
+            keyframe.scan,
+            keyframe.corrected_pose,
+            corrected_map_log_odds_);
+    }
+
+    publishCorrectedMap(stamp);
 }
 
 void SimpleSlamNode::publishMap()
@@ -537,6 +583,23 @@ void SimpleSlamNode::publishMap()
     }
 
     map_pub_->publish(map_msg_);
+}
+
+void SimpleSlamNode::publishCorrectedMap(const rclcpp::Time & stamp)
+{
+    corrected_map_msg_.header.stamp = stamp;
+
+    for (int i = 0; i < width_ * height_; ++i) {
+        double probability = 1.0 / (1.0 + std::exp(-corrected_map_log_odds_[i]));
+
+        if (corrected_map_log_odds_[i] == 0.0) {
+            corrected_map_msg_.data[i] = -1;
+        } else {
+            corrected_map_msg_.data[i] = static_cast<int8_t>(std::round(probability * 100.0));
+        }
+    }
+
+    corrected_map_pub_->publish(corrected_map_msg_);
 }
 
 void SimpleSlamNode::publishEstimatedPose(const rclcpp::Time & stamp)
@@ -649,6 +712,7 @@ void SimpleSlamNode::addKeyFrame(const sensor_msgs::msg::LaserScan & scan)
     keyframe.pose = slam_pose_;
     keyframe.corrected_pose = slam_pose_;
     keyframe.scan_signature = makeScanSignature(scan);
+    keyframe.scan = makeStoredScan(scan);
     keyframe.scan_index = scans_integrated_;
 
     keyframes_.push_back(keyframe);
@@ -712,6 +776,7 @@ bool SimpleSlamNode::detectLoopClosure(const rclcpp::Time & stamp)
     if (shouldApplyLoopClosureCorrection(best_index, current_index)) {
         applyLoopClosureCorrection(best_index, current_index);
         publishCorrectedTrajectory(stamp);
+        rebuildCorrectedMap(stamp);
         correction_applied = true;
     }
 
@@ -784,6 +849,17 @@ void SimpleSlamNode::applyLoopClosureCorrection(
     loop_closure_correction_count_++;
     last_correction_scan_ = scans_integrated_;
     last_corrected_old_keyframe_ = old_index;
+}
+
+StoredScan SimpleSlamNode::makeStoredScan(const sensor_msgs::msg::LaserScan & scan) const
+{
+    StoredScan stored_scan;
+    stored_scan.ranges = scan.ranges;
+    stored_scan.angle_min = scan.angle_min;
+    stored_scan.angle_increment = scan.angle_increment;
+    stored_scan.range_min = scan.range_min;
+    stored_scan.range_max = scan.range_max;
+    return stored_scan;
 }
 
 std::vector<float> SimpleSlamNode::makeScanSignature(
