@@ -28,12 +28,13 @@ or:
 ros2 launch slam simple_slam.launch.py
 ```
 
-This currently includes Stage 1 through Stage 4:
+This currently includes Stage 1 through Stage 5:
 
 - Stage 1: build a live occupancy grid map from lidar scans
 - Stage 2: use local scan matching to slightly correct the odometry pose before updating the map
 - Stage 3: store and publish the estimated trajectory
 - Stage 4: detect simple loop closures
+- Stage 5: apply a simple equally spread trajectory correction between loop-closure keyframes
 
 The current algorithm is:
 
@@ -48,7 +49,8 @@ The current algorithm is:
 9. Add the estimated pose to the trajectory.
 10. Save occasional keyframes.
 11. Compare the current scan with old nearby keyframes to detect loop closure.
-12. Publish the map, estimated pose, scan-matched pose, trajectory, loop-closure pose, and `map -> odom`.
+12. If a loop closure is detected, spread the closing error from the old keyframe to the current keyframe.
+13. Publish the map, estimated pose, scan-matched pose, raw trajectory, corrected trajectory, loop-closure pose, and `map -> odom`.
 
 In short:
 
@@ -73,6 +75,7 @@ The node publishes:
 - `/estimated_pose`: the final SLAM pose estimate in the `map` frame
 - `/scan_matched_pose`: the pose found by scan matching when scan matching is accepted
 - `/trajectory`: the history of estimated robot poses as a `nav_msgs/Path`
+- `/corrected_trajectory`: keyframe path after simple loop-closure correction
 - `/loop_closure_pose`: the old keyframe pose matched when a loop closure is detected
 - TF: `map -> odom`
 
@@ -142,8 +145,40 @@ This package also adds new learning methods:
 - keyframes: saved poses plus a small summary of the laser scan
 - trajectory history: all estimated poses published as a path
 - loop-closure detection: checking whether the robot has returned near an older keyframe with a similar scan
+- simple loop-closure correction: spreading the error evenly between the old matched keyframe and the current keyframe
 
-The loop-closure stage is detection only. It does not correct the map yet.
+The correction is intentionally simple. It corrects the published keyframe trajectory, not the live robot pose and not the map.
+
+## Simple Loop-Closure Correction
+
+When loop closure says:
+
+```text
+current keyframe should line up with old keyframe
+```
+
+the node computes the difference:
+
+```text
+error = old corrected pose - current corrected pose
+```
+
+Then it spreads that error across the keyframes from the old keyframe to the current keyframe.
+
+Example:
+
+```text
+old keyframe = 4
+current keyframe = 20
+```
+
+The correction is applied like this:
+
+- keyframe 4 gets 0% correction
+- keyframe 12 gets about 50% correction
+- keyframe 20 gets 100% correction
+
+This bends the corrected keyframe path toward the old place. It is not a full graph optimizer, but it shows the main idea of using loop closure to repair drift.
 
 ## Terminal Output
 
@@ -172,24 +207,24 @@ This is still not full SLAM yet.
 
 Current limits:
 
-- no pose graph
-- no graph optimization
+- no real pose graph solver
+- no nonlinear graph optimization
 - no global relocalization
 - no map rebuilding after old pose corrections
-- loop closure is detection only and does not fix the map yet
+- loop closure corrects only `/corrected_trajectory`, not `/map`
 - tuning values are still hard-coded
 
-It can correct small odometry errors and detect some returns to old places, but it cannot fix large drift yet.
+It can correct small odometry errors, detect some returns to old places, and show a simple corrected trajectory. It cannot fix the map yet.
 
 ## Future Stages
 
-Stage 5: pose graph optimization.
+Stage 6: pose graph optimization.
 
 - treat old poses as nodes in a graph
 - add movement and loop-closure constraints
 - adjust old poses so the full path becomes more consistent
 
-Stage 6: rebuild or correct the map.
+Stage 7: rebuild or correct the map.
 
 - after old poses are corrected, rebuild the map using corrected poses
 - this is how SLAM can fix a bent map after loop closure
@@ -235,9 +270,11 @@ In RViz:
 - add `/estimated_pose`
 - add `/scan_matched_pose`
 - add `/trajectory`
+- add `/corrected_trajectory`
 - add `/loop_closure_pose`
 - add `TF`
 
 Drive slowly at first. The map should grow around the robot.
 To test loop closure, drive a simple loop and return near an older place.
 When the detector finds a match, the terminal should print `Loop closure detected`, and `/loop_closure_pose` should point to the older matched keyframe.
+Compare `/trajectory` and `/corrected_trajectory` in RViz. After loop closure, the corrected path should bend closer to the old matched place.

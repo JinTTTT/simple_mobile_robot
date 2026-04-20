@@ -36,6 +36,7 @@ struct ScanMatchResult
 struct KeyFrame
 {
     Pose2D pose;
+    Pose2D corrected_pose;
     std::vector<float> scan_signature;
     int scan_index = 0;
 };
@@ -61,11 +62,13 @@ private:
     void publishScanMatchedPose(const Pose2D & pose, const rclcpp::Time & stamp);
     void publishMapToOdomTf(const rclcpp::Time & stamp);
     void updateTrajectory(const rclcpp::Time & stamp);
+    void publishCorrectedTrajectory(const rclcpp::Time & stamp);
     void publishLoopClosurePose(const Pose2D & pose, const rclcpp::Time & stamp);
 
     bool shouldAddKeyFrame() const;
     void addKeyFrame(const sensor_msgs::msg::LaserScan & scan);
-    bool detectLoopClosure(const sensor_msgs::msg::LaserScan & scan, const rclcpp::Time & stamp);
+    bool detectLoopClosure(const rclcpp::Time & stamp);
+    void applyLoopClosureCorrection(std::size_t old_index, std::size_t current_index);
     std::vector<float> makeScanSignature(const sensor_msgs::msg::LaserScan & scan) const;
     double scanSignatureDifference(
         const std::vector<float> & first,
@@ -89,12 +92,14 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr estimated_pose_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr scan_matched_pose_pub_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr trajectory_pub_;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr corrected_trajectory_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr loop_closure_pose_pub_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
     nav_msgs::msg::OccupancyGrid map_msg_;
     nav_msgs::msg::OccupancyGrid likelihood_field_msg_;
     nav_msgs::msg::Path trajectory_msg_;
+    nav_msgs::msg::Path corrected_trajectory_msg_;
     std::vector<double> map_log_odds_;
     std::vector<KeyFrame> keyframes_;
 
@@ -164,6 +169,8 @@ SimpleSlamNode::SimpleSlamNode()
     scan_matched_pose_pub_ =
         this->create_publisher<geometry_msgs::msg::PoseStamped>("/scan_matched_pose", 10);
     trajectory_pub_ = this->create_publisher<nav_msgs::msg::Path>("/trajectory", 10);
+    corrected_trajectory_pub_ =
+        this->create_publisher<nav_msgs::msg::Path>("/corrected_trajectory", 10);
     loop_closure_pose_pub_ =
         this->create_publisher<geometry_msgs::msg::PoseStamped>("/loop_closure_pose", 10);
 
@@ -172,7 +179,7 @@ SimpleSlamNode::SimpleSlamNode()
     RCLCPP_INFO(this->get_logger(), "Simple SLAM node started.");
     RCLCPP_INFO(
         this->get_logger(),
-        "Inputs: /odom, /scan. Outputs: /map, /estimated_pose, /scan_matched_pose, /trajectory, /loop_closure_pose, TF map->odom.");
+        "Inputs: /odom, /scan. Outputs: /map, /estimated_pose, /scan_matched_pose, /trajectory, /corrected_trajectory, /loop_closure_pose, TF map->odom.");
 }
 
 void SimpleSlamNode::initializeMap()
@@ -195,6 +202,7 @@ void SimpleSlamNode::initializeMap()
     likelihood_field_msg_.data.assign(width_ * height_, 0);
 
     trajectory_msg_.header.frame_id = "map";
+    corrected_trajectory_msg_.header.frame_id = "map";
 }
 
 void SimpleSlamNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -244,10 +252,11 @@ void SimpleSlamNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
     scans_integrated_++;
     likelihood_field_dirty_ = true;
     updateTrajectory(msg->header.stamp);
-    detectLoopClosure(*msg, msg->header.stamp);
     if (shouldAddKeyFrame()) {
         addKeyFrame(*msg);
+        detectLoopClosure(msg->header.stamp);
     }
+    publishCorrectedTrajectory(msg->header.stamp);
 
     RCLCPP_INFO_THROTTLE(
         this->get_logger(),
@@ -583,6 +592,25 @@ void SimpleSlamNode::updateTrajectory(const rclcpp::Time & stamp)
     trajectory_pub_->publish(trajectory_msg_);
 }
 
+void SimpleSlamNode::publishCorrectedTrajectory(const rclcpp::Time & stamp)
+{
+    corrected_trajectory_msg_.header.stamp = stamp;
+    corrected_trajectory_msg_.poses.clear();
+    corrected_trajectory_msg_.poses.reserve(keyframes_.size());
+
+    for (const auto & keyframe : keyframes_) {
+        geometry_msgs::msg::PoseStamped pose;
+        pose.header.stamp = stamp;
+        pose.header.frame_id = "map";
+        pose.pose.position.x = keyframe.corrected_pose.x;
+        pose.pose.position.y = keyframe.corrected_pose.y;
+        pose.pose.orientation = yawToQuaternion(keyframe.corrected_pose.theta);
+        corrected_trajectory_msg_.poses.push_back(pose);
+    }
+
+    corrected_trajectory_pub_->publish(corrected_trajectory_msg_);
+}
+
 void SimpleSlamNode::publishLoopClosurePose(const Pose2D & pose, const rclcpp::Time & stamp)
 {
     geometry_msgs::msg::PoseStamped msg;
@@ -610,6 +638,7 @@ void SimpleSlamNode::addKeyFrame(const sensor_msgs::msg::LaserScan & scan)
 {
     KeyFrame keyframe;
     keyframe.pose = slam_pose_;
+    keyframe.corrected_pose = slam_pose_;
     keyframe.scan_signature = makeScanSignature(scan);
     keyframe.scan_index = scans_integrated_;
 
@@ -618,8 +647,7 @@ void SimpleSlamNode::addKeyFrame(const sensor_msgs::msg::LaserScan & scan)
     keyframe_initialized_ = true;
 }
 
-bool SimpleSlamNode::detectLoopClosure(
-    const sensor_msgs::msg::LaserScan & scan, const rclcpp::Time & stamp)
+bool SimpleSlamNode::detectLoopClosure(const rclcpp::Time & stamp)
 {
     if (keyframes_.size() <= static_cast<std::size_t>(min_loop_closure_keyframe_age_)) {
         return false;
@@ -629,30 +657,32 @@ bool SimpleSlamNode::detectLoopClosure(
         return false;
     }
 
-    std::vector<float> current_signature = makeScanSignature(scan);
+    std::size_t current_index = keyframes_.size() - 1;
+    const KeyFrame & current_keyframe = keyframes_[current_index];
     double best_difference = std::numeric_limits<double>::max();
     std::size_t best_index = 0;
     bool found_candidate = false;
 
-    for (std::size_t i = 0; i < keyframes_.size(); ++i) {
+    for (std::size_t i = 0; i < current_index; ++i) {
         const KeyFrame & keyframe = keyframes_[i];
-        int keyframe_age = scans_integrated_ - keyframe.scan_index;
+        int keyframe_age = current_keyframe.scan_index - keyframe.scan_index;
         if (keyframe_age < min_loop_closure_keyframe_age_) {
             continue;
         }
 
-        double distance = poseDistance(slam_pose_, keyframe.pose);
+        double distance = poseDistance(current_keyframe.pose, keyframe.pose);
         if (distance > loop_closure_search_radius_) {
             continue;
         }
 
-        double heading_difference = std::abs(normalizeAngle(slam_pose_.theta - keyframe.pose.theta));
+        double heading_difference =
+            std::abs(normalizeAngle(current_keyframe.pose.theta - keyframe.pose.theta));
         if (heading_difference > loop_closure_max_heading_diff_) {
             continue;
         }
 
         double signature_difference =
-            scanSignatureDifference(current_signature, keyframe.scan_signature);
+            scanSignatureDifference(current_keyframe.scan_signature, keyframe.scan_signature);
         if (signature_difference < best_difference) {
             best_difference = signature_difference;
             best_index = i;
@@ -668,16 +698,43 @@ bool SimpleSlamNode::detectLoopClosure(
     last_loop_closure_scan_ = scans_integrated_;
     const KeyFrame & matched_keyframe = keyframes_[best_index];
     publishLoopClosurePose(matched_keyframe.pose, stamp);
+    applyLoopClosureCorrection(best_index, current_index);
+    publishCorrectedTrajectory(stamp);
 
     RCLCPP_INFO(
         this->get_logger(),
-        "Loop closure detected: current_scan=%d matched_keyframe=%zu old_scan=%d signature_diff=%.3f",
+        "Loop closure detected: current_scan=%d current_keyframe=%zu matched_keyframe=%zu old_scan=%d signature_diff=%.3f",
         scans_integrated_,
+        current_index,
         best_index,
         matched_keyframe.scan_index,
         best_difference);
 
     return true;
+}
+
+void SimpleSlamNode::applyLoopClosureCorrection(
+    std::size_t old_index, std::size_t current_index)
+{
+    if (current_index <= old_index || current_index >= keyframes_.size()) {
+        return;
+    }
+
+    const Pose2D old_pose = keyframes_[old_index].corrected_pose;
+    const Pose2D current_pose = keyframes_[current_index].corrected_pose;
+
+    double error_x = old_pose.x - current_pose.x;
+    double error_y = old_pose.y - current_pose.y;
+    double error_theta = normalizeAngle(old_pose.theta - current_pose.theta);
+    double span = static_cast<double>(current_index - old_index);
+
+    for (std::size_t i = old_index + 1; i <= current_index; ++i) {
+        double fraction = static_cast<double>(i - old_index) / span;
+        keyframes_[i].corrected_pose.x += fraction * error_x;
+        keyframes_[i].corrected_pose.y += fraction * error_y;
+        keyframes_[i].corrected_pose.theta =
+            normalizeAngle(keyframes_[i].corrected_pose.theta + fraction * error_theta);
+    }
 }
 
 std::vector<float> SimpleSlamNode::makeScanSignature(
