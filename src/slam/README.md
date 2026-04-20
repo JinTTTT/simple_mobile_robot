@@ -43,8 +43,8 @@ The current algorithm is:
 2. Apply that movement to the previous SLAM pose.
 3. If the robot has not moved enough, skip scan matching and map update.
 4. If the map is still too empty, trust the odometry prediction.
-5. If the map has enough walls, scan match around the odometry-predicted pose.
-6. If scan matching has a good enough score, use the scan-matched pose.
+5. If enough movement has happened since the last accepted scan match, scan match around the odometry-predicted pose.
+6. Accept scan matching only if it clearly improves the score over the odometry-predicted pose and the correction is not too large.
 7. Otherwise, use the odometry-predicted pose.
 8. Insert the lidar scan into the map using the chosen pose.
 9. Add the estimated pose to the trajectory.
@@ -116,6 +116,26 @@ else:
 ```
 
 This first version does not blend odometry and scan matching with a Kalman filter. It uses the simpler rule above because it is easier to inspect and understand.
+
+## Conservative Scan Matching
+
+The scan matcher is intentionally conservative because wrong scan-matching corrections can draw duplicate or angled walls into the live map.
+
+It now uses these ideas:
+
+- do not start scan matching too early; wait for enough occupied cells in the map
+- use a smaller heading search window
+- do not try scan matching too often
+- compare the best scan-match score against the score at the odometry-predicted pose
+- accept scan matching only if the score improvement is meaningful
+- reject scan matches that try to move the pose too far from odometry
+
+Simple meaning:
+
+```text
+odometry is the default
+scan matching is allowed only when it is clearly helpful
+```
 
 ## Reused Methods From Existing Packages
 
@@ -222,19 +242,21 @@ The corrected map may be sparser than `/map` because it uses keyframe scans only
 The node prints a small throttled summary while scans are integrated:
 
 ```text
-SLAM integrated=... stationary_skipped=... keyframes=... loops=... corrections=... pose=(x, y, theta) match=yes/no score=... occupied=...
+SLAM integrated=... stationary_skipped=... scan_match_used=... keyframes=... loops=... corrections=... pose=(x, y, theta) match=yes/no score=... predicted_score=... occupied=...
 ```
 
 Meaning:
 
 - `integrated`: scans inserted into the map
 - `stationary_skipped`: scans ignored because the robot did not move enough
+- `scan_match_used`: scans where scan matching was accepted
 - `keyframes`: saved keyframes for loop-closure checks
 - `loops`: detected loop closures
 - `corrections`: loop closures that actually changed `/corrected_trajectory`
 - `pose`: current estimated pose
 - `match`: whether scan matching corrected the pose
 - `score`: scan matching score
+- `predicted_score`: score of the odometry-predicted pose before correction
 - `occupied`: occupied cells in the current map
 
 When the robot is not moving, scan matching and map updates are skipped after the first scan. This keeps the node from repeatedly inserting the same scan and making the map over-confident.
@@ -251,6 +273,7 @@ Current limits:
 - loop closure correction is gated and partial, so some drift may remain
 - `/corrected_map` is rebuilt from keyframes only, so it may be less dense than `/map`
 - live `/estimated_pose` and live `/map` are not reset to the corrected trajectory
+- scan matching is still local and can fail in repeated geometry or large drift
 - tuning values are still hard-coded
 
 It can correct small odometry errors, detect some returns to old places, show a simple corrected trajectory, and rebuild a keyframe-based corrected map.

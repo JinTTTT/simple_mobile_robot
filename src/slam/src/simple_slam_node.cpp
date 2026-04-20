@@ -30,6 +30,7 @@ struct ScanMatchResult
 {
     Pose2D pose;
     double score = 0.0;
+    double predicted_score = 0.0;
     bool used_scan_matching = false;
 };
 
@@ -128,9 +129,11 @@ private:
     Pose2D last_odom_pose_;
     Pose2D current_odom_pose_;
     Pose2D last_keyframe_pose_;
+    Pose2D last_scan_match_pose_;
     bool odom_initialized_ = false;
     bool scan_received_ = false;
     bool keyframe_initialized_ = false;
+    bool scan_match_pose_initialized_ = false;
 
     double resolution_ = 0.05;
     int width_ = 500;
@@ -144,16 +147,22 @@ private:
     double log_odds_max_ = 10.0;
 
     int occupied_cell_count_ = 0;
-    int min_occupied_cells_for_matching_ = 80;
+    int min_occupied_cells_for_matching_ = 250;
     bool likelihood_field_dirty_ = true;
     double likelihood_max_distance_ = 1.0;
 
-    double search_xy_range_ = 0.15;
+    double search_xy_range_ = 0.10;
     double search_xy_step_ = 0.05;
-    double search_theta_range_ = 0.17;
-    double search_theta_step_ = 0.085;
+    double search_theta_range_ = 0.08;
+    double search_theta_step_ = 0.04;
     std::size_t scan_match_beam_step_ = 10;
     double min_scan_match_score_ = 0.20;
+    double min_scan_match_score_improvement_ = 0.05;
+    double max_scan_match_translation_correction_ = 0.08;
+    double max_scan_match_rotation_correction_ = 0.08;
+    double min_scan_match_translation_interval_ = 0.05;
+    double min_scan_match_rotation_interval_ = 0.05;
+    int min_scan_match_scan_gap_ = 5;
     double min_update_translation_ = 0.01;
     double min_update_rotation_ = 0.01;
 
@@ -172,8 +181,10 @@ private:
 
     int scans_integrated_ = 0;
     int stationary_scans_skipped_ = 0;
+    int scan_match_used_count_ = 0;
     int loop_closure_count_ = 0;
     int loop_closure_correction_count_ = 0;
+    int last_scan_match_scan_ = -100000;
     int last_loop_closure_scan_ = -100000;
     int last_correction_scan_ = -100000;
     std::size_t last_corrected_old_keyframe_ = std::numeric_limits<std::size_t>::max();
@@ -294,9 +305,10 @@ void SimpleSlamNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
         this->get_logger(),
         *this->get_clock(),
         5000,
-        "SLAM integrated=%d stationary_skipped=%d keyframes=%zu loops=%d corrections=%d pose=(%.2f, %.2f, %.2f) match=%s score=%.3f occupied=%d",
+        "SLAM integrated=%d stationary_skipped=%d scan_match_used=%d keyframes=%zu loops=%d corrections=%d pose=(%.2f, %.2f, %.2f) match=%s score=%.3f predicted_score=%.3f occupied=%d",
         scans_integrated_,
         stationary_scans_skipped_,
+        scan_match_used_count_,
         keyframes_.size(),
         loop_closure_count_,
         loop_closure_correction_count_,
@@ -305,6 +317,7 @@ void SimpleSlamNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr m
         slam_pose_.theta,
         result.used_scan_matching ? "yes" : "no",
         result.score,
+        result.predicted_score,
         occupied_cell_count_);
 }
 
@@ -340,14 +353,31 @@ ScanMatchResult SimpleSlamNode::matchScan(
         return result;
     }
 
+    if (scans_integrated_ - last_scan_match_scan_ < min_scan_match_scan_gap_) {
+        return result;
+    }
+
     if (occupied_cell_count_ < min_occupied_cells_for_matching_) {
         return result;
+    }
+
+    if (scan_match_pose_initialized_) {
+        double distance_since_last_match = poseDistance(predicted, last_scan_match_pose_);
+        double rotation_since_last_match =
+            std::abs(normalizeAngle(predicted.theta - last_scan_match_pose_.theta));
+        if (distance_since_last_match < min_scan_match_translation_interval_ &&
+            rotation_since_last_match < min_scan_match_rotation_interval_)
+        {
+            return result;
+        }
     }
 
     if (likelihood_field_dirty_) {
         rebuildLikelihoodField();
         likelihood_field_dirty_ = false;
     }
+
+    result.predicted_score = scoreScanAtPose(scan, predicted);
 
     double best_score = -std::numeric_limits<double>::infinity();
     Pose2D best_pose = predicted;
@@ -374,9 +404,22 @@ ScanMatchResult SimpleSlamNode::matchScan(
 
     result.score = std::max(best_score, 0.0);
 
-    if (best_score >= min_scan_match_score_) {
+    double correction_translation = poseDistance(best_pose, predicted);
+    double correction_rotation =
+        std::abs(normalizeAngle(best_pose.theta - predicted.theta));
+    double score_improvement = result.score - result.predicted_score;
+
+    if (best_score >= min_scan_match_score_ &&
+        score_improvement >= min_scan_match_score_improvement_ &&
+        correction_translation <= max_scan_match_translation_correction_ &&
+        correction_rotation <= max_scan_match_rotation_correction_)
+    {
         result.pose = best_pose;
         result.used_scan_matching = true;
+        scan_match_used_count_++;
+        last_scan_match_scan_ = scans_integrated_;
+        last_scan_match_pose_ = result.pose;
+        scan_match_pose_initialized_ = true;
     }
 
     return result;
