@@ -4,6 +4,7 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -46,10 +47,12 @@ private:
 
     if (!has_path_) {
       publishStop();
+      resetProgressMonitor();
       RCLCPP_WARN(this->get_logger(), "Received empty path. Stopping robot.");
       return;
     }
 
+    resetProgressMonitor();
     RCLCPP_INFO(
       this->get_logger(),
       "Received path with %zu poses.",
@@ -66,6 +69,7 @@ private:
   {
     if (!has_path_ || !has_pose_) {
       publishStop();
+      resetProgressMonitor();
       return;
     }
 
@@ -74,6 +78,7 @@ private:
         this->get_logger(), *this->get_clock(), 2000,
         "Controller expects path and pose in map frame.");
       publishStop();
+      resetProgressMonitor();
       return;
     }
 
@@ -87,6 +92,7 @@ private:
         publishStop();
         has_path_ = false;
         path_.poses.clear();
+        resetProgressMonitor();
         RCLCPP_INFO_THROTTLE(
           this->get_logger(), *this->get_clock(), 2000,
           "Goal position and final orientation reached. Robot stopped.");
@@ -97,6 +103,7 @@ private:
       cmd_vel.linear.x = 0.0;
       cmd_vel.angular.z = computeFinalAlignmentAngularSpeed(goal_heading_error);
       cmd_vel_pub_->publish(cmd_vel);
+      resetProgressMonitor();
       RCLCPP_INFO_THROTTLE(
         this->get_logger(), *this->get_clock(), 2000,
         "Goal position reached. Rotating to final goal orientation.");
@@ -148,6 +155,7 @@ private:
     }
 
     cmd_vel_pub_->publish(cmd_vel);
+    updateProgressMonitor(goal_distance, cmd_vel);
   }
 
   std::size_t findClosestPathIndex() const
@@ -235,6 +243,143 @@ private:
     cmd_vel_pub_->publish(stop_cmd);
   }
 
+  void resetProgressMonitor()
+  {
+    progress_monitor_initialized_ = false;
+    is_stuck_ = false;
+  }
+
+  double computePathProgressDistance() const
+  {
+    if (path_.poses.empty()) {
+      return 0.0;
+    }
+
+    if (path_.poses.size() == 1) {
+      return 0.0;
+    }
+
+    const double robot_x = current_pose_.pose.position.x;
+    const double robot_y = current_pose_.pose.position.y;
+
+    double accumulated_distance = 0.0;
+    double best_progress_distance = 0.0;
+    double best_distance_to_path = std::numeric_limits<double>::infinity();
+
+    for (std::size_t i = 0; i + 1 < path_.poses.size(); ++i) {
+      const double x0 = path_.poses[i].pose.position.x;
+      const double y0 = path_.poses[i].pose.position.y;
+      const double x1 = path_.poses[i + 1].pose.position.x;
+      const double y1 = path_.poses[i + 1].pose.position.y;
+
+      const double dx = x1 - x0;
+      const double dy = y1 - y0;
+      const double segment_length_squared = dx * dx + dy * dy;
+      const double segment_length = std::sqrt(segment_length_squared);
+
+      if (segment_length < 1e-6) {
+        continue;
+      }
+
+      const double projection_numerator =
+        (robot_x - x0) * dx + (robot_y - y0) * dy;
+      const double t = clamp(projection_numerator / segment_length_squared, 0.0, 1.0);
+
+      const double projected_x = x0 + t * dx;
+      const double projected_y = y0 + t * dy;
+      const double distance_to_segment =
+        std::sqrt(
+        (robot_x - projected_x) * (robot_x - projected_x) +
+        (robot_y - projected_y) * (robot_y - projected_y));
+
+      if (distance_to_segment < best_distance_to_path) {
+        best_distance_to_path = distance_to_segment;
+        best_progress_distance = accumulated_distance + t * segment_length;
+      }
+
+      accumulated_distance += segment_length;
+    }
+
+    return best_progress_distance;
+  }
+
+  double computeTotalPathLength() const
+  {
+    if (path_.poses.size() < 2) {
+      return 0.0;
+    }
+
+    double total_length = 0.0;
+    for (std::size_t i = 0; i + 1 < path_.poses.size(); ++i) {
+      total_length += distanceBetween(path_.poses[i], path_.poses[i + 1]);
+    }
+    return total_length;
+  }
+
+  void updateProgressMonitor(
+    double goal_distance,
+    const geometry_msgs::msg::Twist & cmd_vel)
+  {
+    const double progress_distance = computePathProgressDistance();
+    const double total_path_length = computeTotalPathLength();
+
+    if (!progress_monitor_initialized_) {
+      monitor_start_time_ = this->now();
+      monitor_start_pose_ = current_pose_;
+      monitor_start_goal_distance_ = goal_distance;
+      progress_monitor_initialized_ = true;
+      is_stuck_ = false;
+      return;
+    }
+
+    const double path_progress_ratio = (total_path_length > 1e-6) ?
+      progress_distance / total_path_length :
+      1.0;
+
+    RCLCPP_INFO_THROTTLE(
+      this->get_logger(), *this->get_clock(), 2000,
+      "Path progress %.0f%%, goal distance %.2f m.",
+      path_progress_ratio * 100.0,
+      goal_distance);
+
+    const bool commanding_motion =
+      std::abs(cmd_vel.linear.x) > min_commanded_linear_speed_ ||
+      std::abs(cmd_vel.angular.z) > min_commanded_angular_speed_;
+
+    if (!commanding_motion) {
+      monitor_start_time_ = this->now();
+      monitor_start_pose_ = current_pose_;
+      monitor_start_goal_distance_ = goal_distance;
+      is_stuck_ = false;
+      return;
+    }
+
+    const double elapsed_time = (this->now() - monitor_start_time_).seconds();
+    if (elapsed_time < stuck_detection_window_seconds_) {
+      return;
+    }
+
+    const double moved_distance = distanceBetween(current_pose_, monitor_start_pose_);
+    const double goal_distance_improvement = monitor_start_goal_distance_ - goal_distance;
+
+    is_stuck_ =
+      moved_distance < min_progress_distance_m_ &&
+      goal_distance_improvement < min_goal_distance_improvement_m_;
+
+    if (is_stuck_) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Stuck detected: moved %.3f m, goal improved %.3f m over %.1f s.",
+        moved_distance,
+        goal_distance_improvement,
+        elapsed_time);
+    }
+
+    monitor_start_time_ = this->now();
+    monitor_start_pose_ = current_pose_;
+    monitor_start_goal_distance_ = goal_distance;
+  }
+
   nav_msgs::msg::Path path_;
   geometry_msgs::msg::PoseStamped current_pose_;
 
@@ -245,6 +390,12 @@ private:
 
   bool has_path_ = false;
   bool has_pose_ = false;
+  bool progress_monitor_initialized_ = false;
+  bool is_stuck_ = false;
+
+  rclcpp::Time monitor_start_time_;
+  geometry_msgs::msg::PoseStamped monitor_start_pose_;
+  double monitor_start_goal_distance_ = 0.0;
 
   double lookahead_distance_ = 0.35;
   double max_linear_speed_ = 0.20;
@@ -257,6 +408,11 @@ private:
   double final_alignment_gain_ = 1.50;
   double final_alignment_min_angular_speed_ = 0.20;
   double final_alignment_max_angular_speed_ = 0.50;
+  double stuck_detection_window_seconds_ = 4.0;
+  double min_progress_distance_m_ = 0.05;
+  double min_goal_distance_improvement_m_ = 0.05;
+  double min_commanded_linear_speed_ = 0.02;
+  double min_commanded_angular_speed_ = 0.20;
 };
 
 int main(int argc, char ** argv)

@@ -29,6 +29,8 @@ Current behavior:
 - slow down near the goal
 - stop when the goal position is reached
 - rotate in place to align with the final goal orientation
+- report continuous path progress and goal distance in the logs
+- declare stuck when the robot is commanded to move but does not move enough or reduce goal distance enough over time
 
 How to test:
 

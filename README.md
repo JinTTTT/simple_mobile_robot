@@ -178,6 +178,8 @@ Current behavior:
 - rotate in place first when the heading error is large
 - slow down near the goal position
 - rotate in place at the end to match the final goal orientation
+- report continuous path progress and goal distance while following the path
+- warn when commanded motion is not producing enough movement or goal improvement
 - publish `/cmd_vel` for the simulation robot
 
 This package is meant to keep planning and control separate.
