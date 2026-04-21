@@ -9,7 +9,7 @@ The long term goal is to learn:
 - localization : finished
 - SLAM : first version finished
 - planning : A* planner with collision clearance finished
-- path follow / control : package created, implementation next
+- path follow / control : pure pursuit first version finished
 - navigation : in planning
 
 ## Packages
@@ -144,6 +144,7 @@ Simple logic:
 - inflate obstacles using a conservative circular robot radius from the simulation geometry
 - convert start and goal from world coordinates into map grid cells
 - run A* on an inflated 8-connected occupancy grid
+- keep the final path pose orientation from the RViz goal pose
 - publish the planned path back in the `map` frame
 
 This first planner uses the static saved map from `nav2_map_server`.
@@ -170,9 +171,17 @@ Simple role:
 - compare the current robot pose against that path
 - compute velocity commands that move the robot along the path
 
+Current behavior:
+
+- follow `/planned_path` with a pure-pursuit style controller
+- rotate in place first when the heading error is large
+- slow down near the goal position
+- rotate in place at the end to match the final goal orientation
+- publish `/cmd_vel` for the simulation robot
+
 This package is meant to keep planning and control separate.
 `motion_planning` chooses where to go.
-`path_follow_control` will decide how to move right now.
+`path_follow_control` decides how to move right now.
 It is the right place for path tracking first, and local planning later if needed.
 ## Quick Start
 

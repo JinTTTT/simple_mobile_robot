@@ -292,9 +292,13 @@ private:
       gridToWorld(x, y, pose.pose.position.x, pose.pose.position.y);
       pose.pose.position.z = 0.0;
 
-      const double yaw = computePoseYaw(path_indices, i);
-      pose.pose.orientation.z = std::sin(yaw * 0.5);
-      pose.pose.orientation.w = std::cos(yaw * 0.5);
+      if (i == path_indices.size() - 1) {
+        pose.pose.orientation = goal_pose_.pose.orientation;
+      } else {
+        const double yaw = computePoseYaw(path_indices, i);
+        pose.pose.orientation.z = std::sin(yaw * 0.5);
+        pose.pose.orientation.w = std::cos(yaw * 0.5);
+      }
       path_msg.poses.push_back(pose);
     }
 

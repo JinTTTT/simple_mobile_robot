@@ -7,27 +7,39 @@ Its role is different from the global planner:
 - `motion_planning` decides which path the robot should take
 - `path_follow_control` decides what velocity command the robot should send right now
 
-Planned inputs:
+Inputs:
 
 - `/planned_path`
 - `/estimated_pose`
 
-Planned output:
+Output:
 
 - `/cmd_vel`
 
-The first version should focus on path following for a static path.
+The first version uses pure pursuit for path following on a static planned path.
 
 Main goal:
 
 - convert a planned path into smooth robot motion
 
-Likely learning steps:
+Current behavior:
 
 - rotate toward the path direction
-- drive toward the next path point
+- follow a lookahead point along the path
 - slow down near the goal
-- stop when the goal is reached
+- stop when the goal position is reached
+- rotate in place to align with the final goal orientation
+
+How to test:
+
+- start simulation
+- start the static map server with `src/mapping/maps/maze_map.yaml`
+- start `kalman_localization_node`
+- start `motion_planning_node`
+- start `path_follow_control_node`
+- open RViz with fixed frame `map`
+- add `/map`, `/inflated_map`, and `/planned_path`
+- click a goal with the `2D Goal Pose` tool, including a desired final heading
 
 This package is not the global planner.
 It is also not yet a full local planner with dynamic obstacle avoidance.
