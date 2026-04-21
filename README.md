@@ -9,6 +9,7 @@ The long term goal is to learn:
 - localization : finished
 - SLAM : first version finished
 - planning : A* planner with collision clearance finished
+- path follow / control : package created, implementation next
 - navigation : in planning
 
 ## Packages
@@ -149,6 +150,30 @@ This first planner uses the static saved map from `nav2_map_server`.
 It treats unknown cells as blocked and publishes the inflated map for RViz checking.
 It only plans a global path.
 It does not yet include path smoothing, local planning, or path following.
+
+### `path_follow_control`
+
+This package is the next learning layer after global path planning.
+
+It will read:
+
+- `/planned_path`
+- `/estimated_pose`
+
+It will publish:
+
+- `/cmd_vel`
+
+Simple role:
+
+- take the global path from `motion_planning`
+- compare the current robot pose against that path
+- compute velocity commands that move the robot along the path
+
+This package is meant to keep planning and control separate.
+`motion_planning` chooses where to go.
+`path_follow_control` will decide how to move right now.
+It is the right place for path tracking first, and local planning later if needed.
 ## Quick Start
 
 ### Prerequisites
