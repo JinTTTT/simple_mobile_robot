@@ -8,7 +8,7 @@ The long term goal is to learn:
 - mapping: finished
 - localization : finished
 - SLAM : first version finished
-- planning : A* planner with collision clearance finished
+- planning : A* planner with collision clearance and smoothing finished
 - path follow / control : pure pursuit first version finished
 - navigation : in planning
 
@@ -144,13 +144,14 @@ Simple logic:
 - inflate obstacles using a conservative circular robot radius from the simulation geometry
 - convert start and goal from world coordinates into map grid cells
 - run A* on an inflated 8-connected occupancy grid
+- smooth the raw A* path using line-of-sight shortcutting on the inflated map
 - keep the final path pose orientation from the RViz goal pose
 - publish the planned path back in the `map` frame
 
 This first planner uses the static saved map from `nav2_map_server`.
 It treats unknown cells as blocked and publishes the inflated map for RViz checking.
 It only plans a global path.
-It does not yet include path smoothing, local planning, or path following.
+It does not yet include local planning.
 
 ### `path_follow_control`
 
