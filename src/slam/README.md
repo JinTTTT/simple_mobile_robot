@@ -14,6 +14,29 @@ Simple meaning:
 
 This package is for learning and understanding. It starts with a small, readable SLAM version instead of a full professional SLAM system.
 
+## Status
+
+This package is now good enough to treat as SLAM v1.
+
+What SLAM v1 already does:
+
+- build a live occupancy-grid map from `/scan` and `/odom`
+- use local scan matching for small pose correction
+- publish a normal ROS `map -> odom` transform
+- store a trajectory and keyframes
+- detect loop closure from keyframe scan similarity
+- apply a simple loop-closure trajectory correction
+- rebuild a corrected map from corrected keyframes
+
+Known limits for SLAM v1:
+
+- no real pose graph optimizer
+- no full global relocalization
+- no robust wall-hit / odometry-disagreement recovery yet
+- `/corrected_map` is keyframe-based and may be sparser than `/map`
+
+Those limits are acceptable for this first learning version and are better tracked as future issues than blockers for closing the package.
+
 ## Current Stage
 
 The current node is:
