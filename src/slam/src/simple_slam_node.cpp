@@ -157,12 +157,12 @@ private:
     double search_theta_step_ = 0.04;
     std::size_t scan_match_beam_step_ = 10;
     double min_scan_match_score_ = 0.20;
-    double min_scan_match_score_improvement_ = 0.05;
+    double min_scan_match_score_improvement_ = 0.003;
     double max_scan_match_translation_correction_ = 0.08;
     double max_scan_match_rotation_correction_ = 0.08;
-    double min_scan_match_translation_interval_ = 0.05;
-    double min_scan_match_rotation_interval_ = 0.05;
-    int min_scan_match_scan_gap_ = 5;
+    double min_scan_match_translation_interval_ = 0.02;
+    double min_scan_match_rotation_interval_ = 0.02;
+    int min_scan_match_scan_gap_ = 2;
     double min_update_translation_ = 0.01;
     double min_update_rotation_ = 0.01;
 
