@@ -8,7 +8,7 @@ The long term goal is to learn:
 - mapping: finished
 - localization : finished
 - SLAM : first version finished
-- planning : first A* global planner finished
+- planning : A* planner with collision clearance finished
 - navigation : in planning
 
 ## Packages
@@ -134,17 +134,20 @@ It reads:
 It publishes:
 
 - `/planned_path`
+- `/inflated_map`
 
 Simple logic:
 
 - use the Kalman localization pose as the robot start
 - use the RViz goal pose as the planning target
+- inflate obstacles using a conservative circular robot radius from the simulation geometry
 - convert start and goal from world coordinates into map grid cells
-- run A* on an 8-connected occupancy grid
+- run A* on an inflated 8-connected occupancy grid
 - publish the planned path back in the `map` frame
 
 This first planner uses the static saved map from `nav2_map_server`.
-It treats unknown cells as blocked and only plans a global path.
+It treats unknown cells as blocked and publishes the inflated map for RViz checking.
+It only plans a global path.
 It does not yet include path smoothing, local planning, or path following.
 
 ## Quick Start

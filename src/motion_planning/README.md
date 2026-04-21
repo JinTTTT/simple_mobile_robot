@@ -13,13 +13,15 @@ Inputs:
 Output:
 
 - `/planned_path` as `nav_msgs/msg/Path`
+- `/inflated_map` as `nav_msgs/msg/OccupancyGrid`
 
 Current behavior:
 
 - uses the static occupancy grid from `map_server`
 - uses the Kalman localization estimated pose as the start pose
 - uses the RViz goal pose as the target
-- runs A* on an 8-connected grid
+- inflates obstacles using a conservative circular robot radius of `0.35 m`
+- runs A* on an inflated 8-connected grid
 - treats unknown cells as blocked
 
 How to test:
@@ -29,5 +31,5 @@ How to test:
 - start `kalman_localization_node`
 - start `motion_planning_node`
 - open RViz with fixed frame `map`
-- add `/map` and `/planned_path`
+- add `/map`, `/inflated_map`, and `/planned_path`
 - click a goal with the `2D Goal Pose` tool

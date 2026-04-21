@@ -4,6 +4,7 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -53,10 +54,16 @@ public:
       std::bind(&MotionPlanningNode::goalPoseCallback, this, std::placeholders::_1));
 
     path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/planned_path", 10);
+    inflated_map_pub_ =
+      this->create_publisher<nav_msgs::msg::OccupancyGrid>("/inflated_map", static_map_qos);
 
     RCLCPP_INFO(
       this->get_logger(),
       "MotionPlanningNode started. Inputs: /map, /estimated_pose, /goal_pose. Output: /planned_path.");
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Using conservative circular robot radius %.2f m based on simulation geometry.",
+      robot_radius_m_);
   }
 
 private:
@@ -64,13 +71,17 @@ private:
   {
     map_ = *msg;
     has_map_ = true;
+    rebuildInflatedMap();
+    inflated_map_pub_->publish(inflated_map_);
 
     RCLCPP_INFO(
       this->get_logger(),
-      "Map received: %u x %u cells, resolution %.3f m.",
+      "Map received: %u x %u cells, resolution %.3f m. Inflated by %.2f m (%d cells).",
       map_.info.width,
       map_.info.height,
-      map_.info.resolution);
+      map_.info.resolution,
+      robot_radius_m_,
+      inflation_radius_cells_);
 
     tryPlanIfRequested();
   }
@@ -152,13 +163,13 @@ private:
       return false;
     }
 
-    if (!isCellFree(start_x, start_y)) {
-      RCLCPP_WARN(this->get_logger(), "Start cell is occupied or unknown.");
+    if (!isCellFreeForPlanning(start_x, start_y)) {
+      RCLCPP_WARN(this->get_logger(), "Start cell is occupied, unknown, or inside inflated clearance.");
       return false;
     }
 
-    if (!isCellFree(goal_x, goal_y)) {
-      RCLCPP_WARN(this->get_logger(), "Goal cell is occupied or unknown.");
+    if (!isCellFreeForPlanning(goal_x, goal_y)) {
+      RCLCPP_WARN(this->get_logger(), "Goal cell is occupied, unknown, or inside inflated clearance.");
       return false;
     }
 
@@ -181,8 +192,8 @@ private:
 
   std::vector<int> runAStar(int start_x, int start_y, int goal_x, int goal_y) const
   {
-    const int width = static_cast<int>(map_.info.width);
-    const int height = static_cast<int>(map_.info.height);
+    const int width = static_cast<int>(inflated_map_.info.width);
+    const int height = static_cast<int>(inflated_map_.info.height);
     const int total_cells = width * height;
     const int start_index = gridToIndex(start_x, start_y);
     const int goal_index = gridToIndex(goal_x, goal_y);
@@ -223,7 +234,7 @@ private:
         const int next_x = current_x + offset.first;
         const int next_y = current_y + offset.second;
 
-        if (!isValidCell(next_x, next_y) || !isCellFree(next_x, next_y)) {
+        if (!isValidCell(next_x, next_y) || !isCellFreeForPlanning(next_x, next_y)) {
           continue;
         }
 
@@ -346,13 +357,13 @@ private:
   {
     return grid_x >= 0 &&
            grid_y >= 0 &&
-           grid_x < static_cast<int>(map_.info.width) &&
-           grid_y < static_cast<int>(map_.info.height);
+           grid_x < static_cast<int>(inflated_map_.info.width) &&
+           grid_y < static_cast<int>(inflated_map_.info.height);
   }
 
-  bool isCellFree(int grid_x, int grid_y) const
+  bool isCellFreeForPlanning(int grid_x, int grid_y) const
   {
-    const int8_t cell_value = map_.data[gridToIndex(grid_x, grid_y)];
+    const int8_t cell_value = inflated_map_.data[gridToIndex(grid_x, grid_y)];
     return cell_value >= 0 && cell_value < occupied_threshold_;
   }
 
@@ -368,7 +379,71 @@ private:
     return std::sqrt(dx * dx + dy * dy);
   }
 
+  void rebuildInflatedMap()
+  {
+    inflated_map_ = map_;
+
+    const double resolution = map_.info.resolution;
+    inflation_radius_cells_ = static_cast<int>(std::ceil(robot_radius_m_ / resolution));
+
+    const int width = static_cast<int>(map_.info.width);
+    const int height = static_cast<int>(map_.info.height);
+    const int total_cells = width * height;
+
+    for (int index = 0; index < total_cells; ++index) {
+      if (map_.data[index] >= occupied_threshold_) {
+        inflated_map_.data[index] = 100;
+        continue;
+      }
+
+      if (map_.data[index] < 0) {
+        inflated_map_.data[index] = -1;
+      } else {
+        inflated_map_.data[index] = 0;
+      }
+    }
+
+    for (int source_y = 0; source_y < height; ++source_y) {
+      for (int source_x = 0; source_x < width; ++source_x) {
+        const int source_index = gridToIndex(source_x, source_y);
+        if (map_.data[source_index] < occupied_threshold_) {
+          continue;
+        }
+
+        for (int dy = -inflation_radius_cells_; dy <= inflation_radius_cells_; ++dy) {
+          for (int dx = -inflation_radius_cells_; dx <= inflation_radius_cells_; ++dx) {
+            const int target_x = source_x + dx;
+            const int target_y = source_y + dy;
+
+            if (!isValidInflationTarget(target_x, target_y, width, height)) {
+              continue;
+            }
+
+            const double distance_cells = std::sqrt(static_cast<double>(dx * dx + dy * dy));
+            if (distance_cells > static_cast<double>(inflation_radius_cells_)) {
+              continue;
+            }
+
+            const int target_index = gridToIndex(target_x, target_y);
+            if (inflated_map_.data[target_index] >= 0) {
+              inflated_map_.data[target_index] = 100;
+            }
+          }
+        }
+      }
+    }
+
+    inflated_map_.header.stamp = this->now();
+    inflated_map_.header.frame_id = "map";
+  }
+
+  bool isValidInflationTarget(int grid_x, int grid_y, int width, int height) const
+  {
+    return grid_x >= 0 && grid_y >= 0 && grid_x < width && grid_y < height;
+  }
+
   nav_msgs::msg::OccupancyGrid map_;
+  nav_msgs::msg::OccupancyGrid inflated_map_;
   geometry_msgs::msg::PoseStamped start_pose_;
   geometry_msgs::msg::PoseStamped goal_pose_;
 
@@ -376,6 +451,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr start_pose_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pose_sub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr inflated_map_pub_;
 
   bool has_map_ = false;
   bool has_start_pose_ = false;
@@ -383,6 +459,8 @@ private:
   bool planning_requested_ = false;
 
   int occupied_threshold_ = 50;
+  double robot_radius_m_ = 0.35;
+  int inflation_radius_cells_ = 0;
 };
 
 int main(int argc, char ** argv)
