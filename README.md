@@ -8,7 +8,7 @@ The long term goal is to learn:
 - mapping: finished
 - localization : finished
 - SLAM : first version finished
-- planning : in planning
+- planning : package created, implementation next
 - navigation : in planning
 
 ## Packages
