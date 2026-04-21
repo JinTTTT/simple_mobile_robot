@@ -8,7 +8,8 @@ The long term goal is to learn:
 - mapping: finished
 - localization : finished
 - SLAM : first version finished
-- planning : A* planner with collision clearance finished
+- planning : A* planner with collision clearance and smoothing finished
+- path follow / control : pure pursuit first version finished
 - navigation : in planning
 
 ## Packages
@@ -143,12 +144,48 @@ Simple logic:
 - inflate obstacles using a conservative circular robot radius from the simulation geometry
 - convert start and goal from world coordinates into map grid cells
 - run A* on an inflated 8-connected occupancy grid
+- smooth the raw A* path using line-of-sight shortcutting on the inflated map
+- keep the final path pose orientation from the RViz goal pose
 - publish the planned path back in the `map` frame
 
 This first planner uses the static saved map from `nav2_map_server`.
 It treats unknown cells as blocked and publishes the inflated map for RViz checking.
 It only plans a global path.
-It does not yet include path smoothing, local planning, or path following.
+It does not yet include local planning.
+
+### `path_follow_control`
+
+This package is the next learning layer after global path planning.
+
+It will read:
+
+- `/planned_path`
+- `/estimated_pose`
+
+It will publish:
+
+- `/cmd_vel`
+
+Simple role:
+
+- take the global path from `motion_planning`
+- compare the current robot pose against that path
+- compute velocity commands that move the robot along the path
+
+Current behavior:
+
+- follow `/planned_path` with a pure-pursuit style controller
+- rotate in place first when the heading error is large
+- slow down near the goal position
+- rotate in place at the end to match the final goal orientation
+- report continuous path progress and goal distance while following the path
+- warn when commanded motion is not producing enough movement or goal improvement
+- publish `/cmd_vel` for the simulation robot
+
+This package is meant to keep planning and control separate.
+`motion_planning` chooses where to go.
+`path_follow_control` decides how to move right now.
+It is the right place for path tracking first, and local planning later if needed.
 ## Quick Start
 
 ### Prerequisites

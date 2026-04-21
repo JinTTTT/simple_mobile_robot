@@ -22,6 +22,8 @@ Current behavior:
 - uses the RViz goal pose as the target
 - inflates obstacles using a conservative circular robot radius of `0.35 m`
 - runs A* on an inflated 8-connected grid
+- smooths the raw A* path using line-of-sight shortcutting on `inflated_map`
+- preserves the RViz goal orientation on the final path pose
 - treats unknown cells as blocked
 
 How to test:

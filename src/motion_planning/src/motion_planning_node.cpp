@@ -182,11 +182,12 @@ private:
       return false;
     }
 
-    publishPath(path_indices);
+    const std::vector<int> smoothed_path_indices = smoothPath(path_indices);
+    publishPath(smoothed_path_indices);
     RCLCPP_INFO(
       this->get_logger(),
-      "Published path with %zu poses from (%d, %d) to (%d, %d).",
-      path_indices.size(), start_x, start_y, goal_x, goal_y);
+      "Published smoothed path with %zu poses (raw A* path had %zu poses) from (%d, %d) to (%d, %d).",
+      smoothed_path_indices.size(), path_indices.size(), start_x, start_y, goal_x, goal_y);
     return true;
   }
 
@@ -275,6 +276,91 @@ private:
     return path;
   }
 
+  std::vector<int> smoothPath(const std::vector<int> & raw_path_indices) const
+  {
+    if (raw_path_indices.size() <= 2) {
+      return raw_path_indices;
+    }
+
+    std::vector<int> smoothed_path;
+    smoothed_path.reserve(raw_path_indices.size());
+    smoothed_path.push_back(raw_path_indices.front());
+
+    std::size_t anchor_index = 0;
+    while (anchor_index < raw_path_indices.size() - 1) {
+      std::size_t furthest_visible_index = anchor_index + 1;
+
+      for (std::size_t candidate_index = anchor_index + 1;
+        candidate_index < raw_path_indices.size();
+        ++candidate_index)
+      {
+        if (!hasLineOfSight(raw_path_indices[anchor_index], raw_path_indices[candidate_index])) {
+          break;
+        }
+        furthest_visible_index = candidate_index;
+      }
+
+      smoothed_path.push_back(raw_path_indices[furthest_visible_index]);
+      anchor_index = furthest_visible_index;
+    }
+
+    return smoothed_path;
+  }
+
+  bool hasLineOfSight(int start_index, int end_index) const
+  {
+    const int width = static_cast<int>(inflated_map_.info.width);
+
+    const int start_x = start_index % width;
+    const int start_y = start_index / width;
+    const int end_x = end_index % width;
+    const int end_y = end_index / width;
+
+    const auto cells_on_line = bresenhamLine(start_x, start_y, end_x, end_y);
+    for (const auto & cell : cells_on_line) {
+      if (!isValidCell(cell.first, cell.second) ||
+        !isCellFreeForPlanning(cell.first, cell.second))
+      {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  std::vector<std::pair<int, int>> bresenhamLine(int x0, int y0, int x1, int y1) const
+  {
+    std::vector<std::pair<int, int>> cells;
+
+    int dx = std::abs(x1 - x0);
+    int dy = std::abs(y1 - y0);
+    int sx = (x0 < x1) ? 1 : -1;
+    int sy = (y0 < y1) ? 1 : -1;
+    int err = dx - dy;
+
+    int current_x = x0;
+    int current_y = y0;
+
+    while (true) {
+      cells.emplace_back(current_x, current_y);
+      if (current_x == x1 && current_y == y1) {
+        break;
+      }
+
+      const int twice_err = 2 * err;
+      if (twice_err > -dy) {
+        err -= dy;
+        current_x += sx;
+      }
+      if (twice_err < dx) {
+        err += dx;
+        current_y += sy;
+      }
+    }
+
+    return cells;
+  }
+
   void publishPath(const std::vector<int> & path_indices)
   {
     nav_msgs::msg::Path path_msg;
@@ -292,9 +378,13 @@ private:
       gridToWorld(x, y, pose.pose.position.x, pose.pose.position.y);
       pose.pose.position.z = 0.0;
 
-      const double yaw = computePoseYaw(path_indices, i);
-      pose.pose.orientation.z = std::sin(yaw * 0.5);
-      pose.pose.orientation.w = std::cos(yaw * 0.5);
+      if (i == path_indices.size() - 1) {
+        pose.pose.orientation = goal_pose_.pose.orientation;
+      } else {
+        const double yaw = computePoseYaw(path_indices, i);
+        pose.pose.orientation.z = std::sin(yaw * 0.5);
+        pose.pose.orientation.w = std::cos(yaw * 0.5);
+      }
       path_msg.poses.push_back(pose);
     }
 
