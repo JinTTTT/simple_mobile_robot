@@ -8,7 +8,7 @@ The long term goal is to learn:
 - mapping: finished
 - localization : finished
 - SLAM : first version finished
-- planning : package created, implementation next
+- planning : first A* global planner finished
 - navigation : in planning
 
 ## Packages
@@ -120,6 +120,32 @@ Simple logic:
 
 This SLAM package is good enough as a first learning version.
 It does not yet do full pose graph optimization or robust wall-hit recovery.
+
+### `motion_planning`
+
+This package is the first learning version of global path planning.
+
+It reads:
+
+- `/map`
+- `/estimated_pose`
+- `/goal_pose`
+
+It publishes:
+
+- `/planned_path`
+
+Simple logic:
+
+- use the Kalman localization pose as the robot start
+- use the RViz goal pose as the planning target
+- convert start and goal from world coordinates into map grid cells
+- run A* on an 8-connected occupancy grid
+- publish the planned path back in the `map` frame
+
+This first planner uses the static saved map from `nav2_map_server`.
+It treats unknown cells as blocked and only plans a global path.
+It does not yet include path smoothing, local planning, or path following.
 
 ## Quick Start
 
