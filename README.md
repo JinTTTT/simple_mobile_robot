@@ -7,7 +7,7 @@ The long term goal is to learn:
 - simulation: finished
 - mapping: finished
 - localization : finished
-- SLAM : in progress
+- SLAM : first version finished
 - planning : in planning
 - navigation : in planning
 
@@ -87,6 +87,39 @@ It reads `/map`, `/odom`, and `/scan`.
 It publishes `/estimated_pose`, `/estimated_pose_with_covariance`, `/scan_matched_pose`, and `map -> odom`.
 The scan-matched pose is also used as a Kalman correction measurement when its score and distance gates pass.
 It is a local tracker, so large odometry errors can still make it lose the actual pose.
+
+### `slam`
+
+This package is the first learning version of SLAM.
+
+It reads:
+
+- `/odom`
+- `/scan`
+
+It publishes:
+
+- `/map`
+- `/corrected_map`
+- `/estimated_pose`
+- `/scan_matched_pose`
+- `/trajectory`
+- `/corrected_trajectory`
+- `/loop_closure_pose`
+- TF: `map -> odom`
+
+Simple logic:
+
+- predict pose from odometry
+- use local scan matching for small pose correction
+- build a live occupancy-grid map
+- store trajectory history and keyframes
+- detect loop closure from old keyframes
+- apply a simple evenly spread trajectory correction
+- rebuild a corrected map from corrected keyframes
+
+This SLAM package is good enough as a first learning version.
+It does not yet do full pose graph optimization or robust wall-hit recovery.
 
 ## Quick Start
 
@@ -226,12 +259,57 @@ For the Kalman-filter node, add `/estimated_pose`, `/estimated_pose_with_covaria
 
 Do not run both localization nodes at the same time.
 
+## Run Case 3: SLAM
+
+### 1. Start simulation
+
+```bash
+ros2 launch simulation bringup_simulation.launch.py
+```
+
+### 2. Start teleop
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
+### 3. Start SLAM
+
+```bash
+ros2 launch slam simple_slam.launch.py
+```
+
+### 4. Start RViz
+
+```bash
+rviz2
+```
+
+In RViz:
+
+- set Fixed Frame to `map`
+- add `/map`
+- add `/corrected_map`
+- add `/estimated_pose`
+- add `/trajectory`
+- add `/corrected_trajectory`
+- add `/loop_closure_pose`
+- add `TF`
+
+During normal driving:
+
+- `/map` is the live online map
+- `/corrected_map` is rebuilt from corrected keyframes after loop-closure correction
+- `/trajectory` is the raw path
+- `/corrected_trajectory` is the loop-corrected keyframe path
+
 ## Project Structure
 
 ```text
 gazebo_ws/
 ├── README.md
 └── src/
+    ├── slam/
     ├── simulation/
     ├── mapping/
     └── localization/
@@ -243,3 +321,5 @@ gazebo_ws/
 - Mapping works as a basic occupancy grid mapper.
 - Localization includes a particle-filter node with likelihood-field scan scoring.
 - Localization includes a simple Kalman-filter node with odometry prediction, scan-matching correction, and covariance output.
+- SLAM v1 includes live mapping, local scan matching, trajectory history, loop-closure detection, simple trajectory correction, and corrected-map rebuilding.
+- SLAM v1 still has known limitations in wall-hit / odometry-disagreement cases and does not yet include pose graph optimization.
