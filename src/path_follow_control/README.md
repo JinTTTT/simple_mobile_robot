@@ -32,13 +32,35 @@ Current behavior:
 - report continuous path progress and goal distance in the logs
 - declare stuck when the robot is commanded to move but does not move enough or reduce goal distance enough over time
 
+Main tuning parameters:
+
+- `lookahead_distance`
+- `max_linear_speed`
+- `max_angular_speed`
+- `rotate_in_place_angle_threshold`
+- `goal_tolerance_distance`
+- `goal_tolerance_angle`
+- `slow_down_goal_distance`
+- `final_alignment_max_angular_speed`
+- `stuck_detection_window_seconds`
+- `min_progress_distance_m`
+- `min_goal_distance_improvement_m`
+
+Config file:
+
+- `config/path_follow_control.yaml`
+
+Launch file:
+
+- `launch/path_follow_control.launch.py`
+
 How to test:
 
 - start simulation
 - start the static map server with `src/mapping/maps/maze_map.yaml`
 - start `kalman_localization_node`
 - start `motion_planning_node`
-- start `path_follow_control_node`
+- start `path_follow_control_node` or `ros2 launch path_follow_control path_follow_control.launch.py`
 - open RViz with fixed frame `map`
 - add `/map`, `/inflated_map`, and `/planned_path`
 - click a goal with the `2D Goal Pose` tool, including a desired final heading

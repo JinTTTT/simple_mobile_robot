@@ -26,12 +26,26 @@ Current behavior:
 - preserves the RViz goal orientation on the final path pose
 - treats unknown cells as blocked
 
+Main tuning parameters:
+
+- `robot_radius_m`
+- `occupied_threshold`
+- `enable_path_smoothing`
+
+Config file:
+
+- `config/motion_planning.yaml`
+
+Launch file:
+
+- `launch/motion_planning.launch.py`
+
 How to test:
 
 - start simulation
 - start the static map server with `src/mapping/maps/maze_map.yaml`
 - start `kalman_localization_node`
-- start `motion_planning_node`
+- start `motion_planning_node` or `ros2 launch motion_planning motion_planning.launch.py`
 - open RViz with fixed frame `map`
 - add `/map`, `/inflated_map`, and `/planned_path`
 - click a goal with the `2D Goal Pose` tool

@@ -37,6 +37,10 @@ public:
   MotionPlanningNode()
   : Node("motion_planning_node")
   {
+    robot_radius_m_ = this->declare_parameter<double>("robot_radius_m", 0.35);
+    occupied_threshold_ = this->declare_parameter<int>("occupied_threshold", 50);
+    enable_path_smoothing_ = this->declare_parameter<bool>("enable_path_smoothing", true);
+
     rclcpp::QoS static_map_qos(1);
     static_map_qos.transient_local();
     static_map_qos.reliable();
@@ -64,6 +68,11 @@ public:
       this->get_logger(),
       "Using conservative circular robot radius %.2f m based on simulation geometry.",
       robot_radius_m_);
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Occupied threshold: %d, path smoothing: %s.",
+      occupied_threshold_,
+      enable_path_smoothing_ ? "enabled" : "disabled");
   }
 
 private:
@@ -182,12 +191,13 @@ private:
       return false;
     }
 
-    const std::vector<int> smoothed_path_indices = smoothPath(path_indices);
-    publishPath(smoothed_path_indices);
+    const std::vector<int> final_path_indices =
+      enable_path_smoothing_ ? smoothPath(path_indices) : path_indices;
+    publishPath(final_path_indices);
     RCLCPP_INFO(
       this->get_logger(),
-      "Published smoothed path with %zu poses (raw A* path had %zu poses) from (%d, %d) to (%d, %d).",
-      smoothed_path_indices.size(), path_indices.size(), start_x, start_y, goal_x, goal_y);
+      "Published path with %zu poses (raw A* path had %zu poses) from (%d, %d) to (%d, %d).",
+      final_path_indices.size(), path_indices.size(), start_x, start_y, goal_x, goal_y);
     return true;
   }
 
@@ -550,6 +560,7 @@ private:
 
   int occupied_threshold_ = 50;
   double robot_radius_m_ = 0.35;
+  bool enable_path_smoothing_ = true;
   int inflation_radius_cells_ = 0;
 };
 

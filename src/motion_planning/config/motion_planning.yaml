@@ -1,0 +1,5 @@
+motion_planning_node:
+  ros__parameters:
+    robot_radius_m: 0.35
+    occupied_threshold: 50
+    enable_path_smoothing: true

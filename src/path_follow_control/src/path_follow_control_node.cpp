@@ -15,6 +15,26 @@ public:
   PathFollowControlNode()
   : Node("path_follow_control_node")
   {
+    lookahead_distance_ = this->declare_parameter<double>("lookahead_distance", 0.35);
+    max_linear_speed_ = this->declare_parameter<double>("max_linear_speed", 0.20);
+    max_angular_speed_ = this->declare_parameter<double>("max_angular_speed", 0.80);
+    rotate_in_place_angle_threshold_ =
+      this->declare_parameter<double>("rotate_in_place_angle_threshold", 0.50);
+    goal_tolerance_distance_ =
+      this->declare_parameter<double>("goal_tolerance_distance", 0.10);
+    goal_tolerance_angle_ =
+      this->declare_parameter<double>("goal_tolerance_angle", 0.15);
+    slow_down_goal_distance_ =
+      this->declare_parameter<double>("slow_down_goal_distance", 0.50);
+    final_alignment_max_angular_speed_ =
+      this->declare_parameter<double>("final_alignment_max_angular_speed", 0.50);
+    stuck_detection_window_seconds_ =
+      this->declare_parameter<double>("stuck_detection_window_seconds", 4.0);
+    min_progress_distance_m_ =
+      this->declare_parameter<double>("min_progress_distance_m", 0.05);
+    min_goal_distance_improvement_m_ =
+      this->declare_parameter<double>("min_goal_distance_improvement_m", 0.05);
+
     path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
       "/planned_path", 10,
       std::bind(&PathFollowControlNode::pathCallback, this, std::placeholders::_1));
@@ -37,6 +57,13 @@ public:
       "Pure pursuit enabled with lookahead %.2f m and rotate-in-place threshold %.2f rad.",
       lookahead_distance_,
       rotate_in_place_angle_threshold_);
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Linear max %.2f m/s, angular max %.2f rad/s, goal tolerances %.2f m / %.2f rad.",
+      max_linear_speed_,
+      max_angular_speed_,
+      goal_tolerance_distance_,
+      goal_tolerance_angle_);
   }
 
 private:

@@ -153,6 +153,14 @@ It treats unknown cells as blocked and publishes the inflated map for RViz check
 It only plans a global path.
 It does not yet include local planning.
 
+Main tuning is now exposed through:
+
+- `src/motion_planning/config/motion_planning.yaml`
+
+Package launch file:
+
+- `ros2 launch motion_planning motion_planning.launch.py`
+
 ### `path_follow_control`
 
 This package is the next learning layer after global path planning.
@@ -186,6 +194,14 @@ This package is meant to keep planning and control separate.
 `motion_planning` chooses where to go.
 `path_follow_control` decides how to move right now.
 It is the right place for path tracking first, and local planning later if needed.
+
+Main tuning is now exposed through:
+
+- `src/path_follow_control/config/path_follow_control.yaml`
+
+Package launch file:
+
+- `ros2 launch path_follow_control path_follow_control.launch.py`
 ## Quick Start
 
 ### Prerequisites
