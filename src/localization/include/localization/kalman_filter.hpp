@@ -14,8 +14,8 @@ struct KalmanFilterParameters {
     double distance_noise_scale = 0.10;
     double rotation_noise_scale = 0.10;
 
-    double min_translation_delta = 0.001;
-    double min_rotation_delta = 0.001;
+    double min_translation_delta = 0.0002;
+    double min_rotation_delta = 0.0002;
 };
 
 struct KalmanPose {
