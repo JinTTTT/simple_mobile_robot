@@ -9,7 +9,7 @@ Its role is different from the global planner:
 
 Inputs:
 
-- `/planned_path`
+- `/smoothed_planned_path`
 - `/estimated_pose`
 
 Output:
@@ -62,7 +62,7 @@ How to test:
 - start `motion_planning_node`
 - start `path_follow_control_node` or `ros2 launch path_follow_control path_follow_control.launch.py`
 - open RViz with fixed frame `map`
-- add `/map`, `/inflated_map`, and `/planned_path`
+- add `/map`, `/inflated_map`, `/planned_path`, and `/smoothed_planned_path`
 - click a goal with the `2D Goal Pose` tool, including a desired final heading
 
 This package is not the global planner.

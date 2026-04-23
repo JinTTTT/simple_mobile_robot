@@ -39,7 +39,7 @@ public:
       this->declare_parameter<double>("min_goal_distance_improvement_m", 0.05);
 
     path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
-      "/planned_path", 10,
+      "/smoothed_planned_path", 10,
       std::bind(&PathFollowControlNode::pathCallback, this, std::placeholders::_1));
 
     pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -56,7 +56,7 @@ public:
 
     RCLCPP_INFO(
       this->get_logger(),
-      "PathFollowControlNode started. Inputs: /planned_path, /estimated_pose. Output: /cmd_vel.");
+      "PathFollowControlNode started. Inputs: /smoothed_planned_path, /estimated_pose. Output: /cmd_vel.");
     RCLCPP_INFO(
       this->get_logger(),
       "Pure pursuit enabled with lookahead %.2f m, initial alignment threshold %.2f rad, and rotate-in-place threshold %.2f rad.",

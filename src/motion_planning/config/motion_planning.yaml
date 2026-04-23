@@ -3,3 +3,5 @@ motion_planning_node:
     robot_radius_m: 0.35
     occupied_threshold: 50
     enable_path_smoothing: true
+    enable_cubic_spline_smoothing: true
+    spline_sample_spacing_m: 0.05
