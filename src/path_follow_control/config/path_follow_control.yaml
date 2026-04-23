@@ -1,8 +1,9 @@
 path_follow_control_node:
   ros__parameters:
     lookahead_distance: 0.35
-    max_linear_speed: 0.20
-    max_angular_speed: 0.80
+    max_linear_speed: 0.30
+    max_angular_speed: 0.8
+    initial_alignment_angle_threshold: 0.10
     rotate_in_place_angle_threshold: 0.50
     goal_tolerance_distance: 0.10
     goal_tolerance_angle: 0.15

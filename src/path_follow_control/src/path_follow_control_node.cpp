@@ -1,4 +1,5 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/point_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -18,6 +19,8 @@ public:
     lookahead_distance_ = this->declare_parameter<double>("lookahead_distance", 0.35);
     max_linear_speed_ = this->declare_parameter<double>("max_linear_speed", 0.20);
     max_angular_speed_ = this->declare_parameter<double>("max_angular_speed", 0.80);
+    initial_alignment_angle_threshold_ =
+      this->declare_parameter<double>("initial_alignment_angle_threshold", 0.10);
     rotate_in_place_angle_threshold_ =
       this->declare_parameter<double>("rotate_in_place_angle_threshold", 0.50);
     goal_tolerance_distance_ =
@@ -44,6 +47,8 @@ public:
       std::bind(&PathFollowControlNode::poseCallback, this, std::placeholders::_1));
 
     cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+    lookahead_point_pub_ =
+      this->create_publisher<geometry_msgs::msg::PointStamped>("/lookahead_point", 10);
 
     control_timer_ = this->create_wall_timer(
       std::chrono::milliseconds(100),
@@ -54,8 +59,9 @@ public:
       "PathFollowControlNode started. Inputs: /planned_path, /estimated_pose. Output: /cmd_vel.");
     RCLCPP_INFO(
       this->get_logger(),
-      "Pure pursuit enabled with lookahead %.2f m and rotate-in-place threshold %.2f rad.",
+      "Pure pursuit enabled with lookahead %.2f m, initial alignment threshold %.2f rad, and rotate-in-place threshold %.2f rad.",
       lookahead_distance_,
+      initial_alignment_angle_threshold_,
       rotate_in_place_angle_threshold_);
     RCLCPP_INFO(
       this->get_logger(),
@@ -74,15 +80,17 @@ private:
 
     if (!has_path_) {
       publishStop();
+      needs_initial_alignment_ = false;
       resetProgressMonitor();
       RCLCPP_WARN(this->get_logger(), "Received empty path. Stopping robot.");
       return;
     }
 
+    needs_initial_alignment_ = true;
     resetProgressMonitor();
     RCLCPP_INFO(
       this->get_logger(),
-      "Received path with %zu poses.",
+      "Received path with %zu poses. Initial heading alignment enabled.",
       path_.poses.size());
   }
 
@@ -118,6 +126,7 @@ private:
       if (std::abs(goal_heading_error) < goal_tolerance_angle_) {
         publishStop();
         has_path_ = false;
+        needs_initial_alignment_ = false;
         path_.poses.clear();
         resetProgressMonitor();
         RCLCPP_INFO_THROTTLE(
@@ -138,8 +147,11 @@ private:
     }
 
     const std::size_t closest_index = findClosestPathIndex();
-    const std::size_t target_index = findLookaheadIndex(closest_index);
-    const geometry_msgs::msg::PoseStamped & target_pose = path_.poses[target_index];
+    const std::size_t tracking_target_index = findLookaheadIndex(closest_index);
+    const std::size_t initial_target_index = findLookaheadIndex(0);
+    const geometry_msgs::msg::PoseStamped & target_pose =
+      path_.poses[needs_initial_alignment_ ? initial_target_index : tracking_target_index];
+    publishLookaheadPoint(target_pose);
 
     const double robot_x = current_pose_.pose.position.x;
     const double robot_y = current_pose_.pose.position.y;
@@ -154,6 +166,26 @@ private:
     const double heading_error = normalizeAngle(target_bearing - robot_yaw);
 
     geometry_msgs::msg::Twist cmd_vel;
+
+    if (needs_initial_alignment_) {
+      if (std::abs(heading_error) > initial_alignment_angle_threshold_) {
+        cmd_vel.linear.x = 0.0;
+        cmd_vel.angular.z = clamp(
+          rotate_in_place_gain_ * heading_error,
+          -max_angular_speed_,
+          max_angular_speed_);
+        cmd_vel_pub_->publish(cmd_vel);
+        resetProgressMonitor();
+        RCLCPP_INFO_THROTTLE(
+          this->get_logger(), *this->get_clock(), 2000,
+          "Initial alignment active. Heading error %.2f rad to first lookahead target.",
+          heading_error);
+        return;
+      }
+
+      needs_initial_alignment_ = false;
+      RCLCPP_INFO(this->get_logger(), "Initial alignment finished. Switching to path tracking.");
+    }
 
     if (std::abs(heading_error) > rotate_in_place_angle_threshold_) {
       cmd_vel.linear.x = 0.0;
@@ -268,6 +300,14 @@ private:
   {
     geometry_msgs::msg::Twist stop_cmd;
     cmd_vel_pub_->publish(stop_cmd);
+  }
+
+  void publishLookaheadPoint(const geometry_msgs::msg::PoseStamped & target_pose)
+  {
+    geometry_msgs::msg::PointStamped msg;
+    msg.header = target_pose.header;
+    msg.point = target_pose.pose.position;
+    lookahead_point_pub_->publish(msg);
   }
 
   void resetProgressMonitor()
@@ -413,10 +453,12 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr lookahead_point_pub_;
   rclcpp::TimerBase::SharedPtr control_timer_;
 
   bool has_path_ = false;
   bool has_pose_ = false;
+  bool needs_initial_alignment_ = false;
   bool progress_monitor_initialized_ = false;
   bool is_stuck_ = false;
 
@@ -427,6 +469,7 @@ private:
   double lookahead_distance_ = 0.35;
   double max_linear_speed_ = 0.20;
   double max_angular_speed_ = 0.80;
+  double initial_alignment_angle_threshold_ = 0.10;
   double rotate_in_place_angle_threshold_ = 0.50;
   double rotate_in_place_gain_ = 1.50;
   double goal_tolerance_distance_ = 0.10;
