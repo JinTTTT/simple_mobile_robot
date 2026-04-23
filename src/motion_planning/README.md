@@ -25,8 +25,9 @@ Current behavior:
 - runs A* on an inflated 8-connected grid
 - first simplifies the raw A* path using line-of-sight shortcutting on `inflated_map`
 - publishes that shortcut result on `/planned_path`
-- then applies natural cubic spline smoothing, samples the curve at fixed spacing, and publishes it on `/smoothed_planned_path`
-- falls back to the shortcut path on `/smoothed_planned_path` if any spline sample enters occupied or unknown space
+- then tries natural cubic spline smoothing on the shortcut path
+- uniformly resamples the final chosen geometry at fixed spacing and publishes it on `/smoothed_planned_path`
+- if any spline sample enters occupied or unknown space, the node falls back to the shortcut geometry before the final fixed-spacing resampling step
 - preserves the RViz goal orientation on both published path variants
 - treats unknown cells as blocked
 
@@ -37,8 +38,9 @@ How spline smoothing is evaluated:
 - for example, `spline_sample_spacing_m = 0.05` means the spline is evaluated about every `5 cm`
 - every sampled spline point is converted back into a map cell with `worldToGrid()`
 - every sampled cell is checked with `isCellFreeForPlanning()`
-- the smoothed path is accepted only if every sampled point stays inside the map and inside a free cell of the inflated map
-- if any sampled point is outside the map, occupied, or unknown, the node logs a warning and falls back to the shortcut path
+- the spline geometry is accepted only if every sampled point stays inside the map and inside a free cell of the inflated map
+- if any sampled point is outside the map, occupied, or unknown, the node logs a warning and falls back to the shortcut geometry
+- after choosing either the spline geometry or the fallback shortcut geometry, the final path is uniformly resampled at `spline_sample_spacing_m`
 
 Main tuning parameters:
 

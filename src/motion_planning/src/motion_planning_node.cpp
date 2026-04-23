@@ -208,15 +208,17 @@ private:
     const std::vector<int> shortcut_path_indices =
       enable_path_smoothing_ ? smoothPath(path_indices) : path_indices;
     const nav_msgs::msg::Path shortcut_path = buildGridPathMessage(shortcut_path_indices);
-    const nav_msgs::msg::Path smoothed_path =
+    const nav_msgs::msg::Path geometry_path =
       enable_cubic_spline_smoothing_ ? buildSplinePath(shortcut_path) : shortcut_path;
+    const nav_msgs::msg::Path smoothed_path =
+      resamplePathUniformly(geometry_path, spline_sample_spacing_m_);
 
     path_pub_->publish(shortcut_path);
     smoothed_path_pub_->publish(smoothed_path);
     RCLCPP_INFO(
       this->get_logger(),
-      "Published shortcut path with %zu poses and spline path with %zu poses (raw A* path had %zu poses) from (%d, %d) to (%d, %d).",
-      shortcut_path.poses.size(), smoothed_path.poses.size(), path_indices.size(),
+      "Published shortcut path with %zu poses and dense final path with %zu poses (geometry path had %zu poses, raw A* path had %zu poses) from (%d, %d) to (%d, %d).",
+      shortcut_path.poses.size(), smoothed_path.poses.size(), geometry_path.poses.size(), path_indices.size(),
       start_x, start_y, goal_x, goal_y);
     return true;
   }
@@ -418,6 +420,106 @@ private:
       path_msg.poses.push_back(pose);
     }
     return path_msg;
+  }
+
+  double computeTotalPathLength(const nav_msgs::msg::Path & path) const
+  {
+    if (path.poses.size() < 2) {
+      return 0.0;
+    }
+
+    double total_length = 0.0;
+    for (std::size_t i = 0; i + 1 < path.poses.size(); ++i) {
+      const double dx = path.poses[i + 1].pose.position.x - path.poses[i].pose.position.x;
+      const double dy = path.poses[i + 1].pose.position.y - path.poses[i].pose.position.y;
+      total_length += std::sqrt(dx * dx + dy * dy);
+    }
+
+    return total_length;
+  }
+
+  nav_msgs::msg::Path resamplePathUniformly(
+    const nav_msgs::msg::Path & input_path,
+    double sample_spacing) const
+  {
+    if (input_path.poses.size() < 2) {
+      return input_path;
+    }
+
+    const double effective_spacing = std::max(sample_spacing, 1e-3);
+    std::vector<PathPoint> resampled_points;
+    resampled_points.reserve(
+      std::max<std::size_t>(
+        input_path.poses.size(),
+        static_cast<std::size_t>(std::ceil(computeTotalPathLength(input_path) / effective_spacing)) + 1U));
+
+    const auto & first_position = input_path.poses.front().pose.position;
+    resampled_points.push_back({first_position.x, first_position.y});
+
+    double distance_until_next_sample = effective_spacing;
+
+    for (std::size_t i = 0; i + 1 < input_path.poses.size(); ++i) {
+      const auto & start = input_path.poses[i].pose.position;
+      const auto & end = input_path.poses[i + 1].pose.position;
+      const double dx = end.x - start.x;
+      const double dy = end.y - start.y;
+      const double segment_length = std::sqrt(dx * dx + dy * dy);
+
+      if (segment_length <= 1e-9) {
+        continue;
+      }
+
+      double distance_along_segment = distance_until_next_sample;
+      while (distance_along_segment < segment_length) {
+        const double ratio = distance_along_segment / segment_length;
+        resampled_points.push_back({
+          start.x + ratio * dx,
+          start.y + ratio * dy
+        });
+        distance_along_segment += effective_spacing;
+      }
+
+      distance_until_next_sample = distance_along_segment - segment_length;
+      if (distance_until_next_sample <= 1e-9) {
+        distance_until_next_sample = effective_spacing;
+      }
+    }
+
+    const auto & last_position = input_path.poses.back().pose.position;
+    if (std::hypot(
+        resampled_points.back().x - last_position.x,
+        resampled_points.back().y - last_position.y) > 1e-6)
+    {
+      resampled_points.push_back({last_position.x, last_position.y});
+    }
+
+    nav_msgs::msg::Path resampled_path;
+    resampled_path.header = input_path.header;
+    resampled_path.poses.reserve(resampled_points.size());
+
+    for (std::size_t i = 0; i < resampled_points.size(); ++i) {
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header = resampled_path.header;
+      pose.pose.position.x = resampled_points[i].x;
+      pose.pose.position.y = resampled_points[i].y;
+      pose.pose.position.z = 0.0;
+
+      if (i == resampled_points.size() - 1) {
+        pose.pose.orientation = goal_pose_.pose.orientation;
+      } else {
+        const std::size_t next_index = std::min(i + 1, resampled_points.size() - 1);
+        const std::size_t prev_index = (i == 0) ? 0 : i - 1;
+        const double yaw = std::atan2(
+          resampled_points[next_index].y - resampled_points[prev_index].y,
+          resampled_points[next_index].x - resampled_points[prev_index].x);
+        pose.pose.orientation.z = std::sin(yaw * 0.5);
+        pose.pose.orientation.w = std::cos(yaw * 0.5);
+      }
+
+      resampled_path.poses.push_back(pose);
+    }
+
+    return resampled_path;
   }
 
   double computePoseYaw(const std::vector<int> & path_indices, std::size_t index_in_path) const

@@ -135,6 +135,7 @@ It reads:
 It publishes:
 
 - `/planned_path`
+- `/smoothed_planned_path`
 - `/inflated_map`
 
 Simple logic:
@@ -145,8 +146,10 @@ Simple logic:
 - convert start and goal from world coordinates into map grid cells
 - run A* on an inflated 8-connected occupancy grid
 - smooth the raw A* path using line-of-sight shortcutting on the inflated map
+- try natural cubic spline smoothing on the shortcut path
+- uniformly resample the final chosen geometry so `/smoothed_planned_path` stays dense even if spline smoothing falls back
 - keep the final path pose orientation from the RViz goal pose
-- publish the planned path back in the `map` frame
+- publish both the shortcut path and the dense final path back in the `map` frame
 
 This first planner uses the static saved map from `nav2_map_server`.
 It treats unknown cells as blocked and publishes the inflated map for RViz checking.
@@ -167,7 +170,7 @@ This package is the next learning layer after global path planning.
 
 It will read:
 
-- `/planned_path`
+- `/smoothed_planned_path`
 - `/estimated_pose`
 
 It will publish:
@@ -182,8 +185,11 @@ Simple role:
 
 Current behavior:
 
-- follow `/planned_path` with a pure-pursuit style controller
+- follow `/smoothed_planned_path` with a pure-pursuit style controller
 - rotate in place first when the heading error is large
+- compute curvature from the lookahead point in the robot frame
+- use `w = v * curvature` for angular speed
+- reduce linear speed on sharper turns using curvature-based slowdown
 - slow down near the goal position
 - rotate in place at the end to match the final goal orientation
 - report continuous path progress and goal distance while following the path

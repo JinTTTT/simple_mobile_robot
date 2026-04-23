@@ -26,6 +26,9 @@ Current behavior:
 
 - rotate toward the path direction
 - follow a lookahead point along the path
+- compute pure-pursuit curvature from the lookahead point in the robot frame
+- set angular speed from `w = v * curvature`
+- reduce linear speed on sharper turns with curvature-based slowdown
 - slow down near the goal
 - stop when the goal position is reached
 - rotate in place to align with the final goal orientation
@@ -36,7 +39,9 @@ Main tuning parameters:
 
 - `lookahead_distance`
 - `max_linear_speed`
+- `min_linear_speed`
 - `max_angular_speed`
+- `curvature_slowdown_gain`
 - `rotate_in_place_angle_threshold`
 - `goal_tolerance_distance`
 - `goal_tolerance_angle`
