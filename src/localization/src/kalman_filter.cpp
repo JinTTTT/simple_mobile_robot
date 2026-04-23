@@ -38,8 +38,15 @@ void KalmanFilter::predictFromOdometry(
         return;
     }
 
-    state_.x += dx;
-    state_.y += dy;
+    // Rotate odom-frame translation into the map frame before updating the map pose.
+    double map_to_odom_theta = normalizeAngle(state_.theta - old_theta);
+    double map_dx =
+        std::cos(map_to_odom_theta) * dx - std::sin(map_to_odom_theta) * dy;
+    double map_dy =
+        std::sin(map_to_odom_theta) * dx + std::cos(map_to_odom_theta) * dy;
+
+    state_.x += map_dx;
+    state_.y += map_dy;
     state_.theta = normalizeAngle(state_.theta + dtheta);
 
     Matrix3x3 process_noise = makeProcessNoise(distance, rotation);
