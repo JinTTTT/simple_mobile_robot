@@ -30,6 +30,16 @@ Current behavior:
 - preserves the RViz goal orientation on both published path variants
 - treats unknown cells as blocked
 
+How spline smoothing is evaluated:
+
+- the spline is sampled from path parameter `t = 0` to the total path length
+- `spline_sample_spacing_m` controls the sampling resolution along the curve
+- for example, `spline_sample_spacing_m = 0.05` means the spline is evaluated about every `5 cm`
+- every sampled spline point is converted back into a map cell with `worldToGrid()`
+- every sampled cell is checked with `isCellFreeForPlanning()`
+- the smoothed path is accepted only if every sampled point stays inside the map and inside a free cell of the inflated map
+- if any sampled point is outside the map, occupied, or unknown, the node logs a warning and falls back to the shortcut path
+
 Main tuning parameters:
 
 - `robot_radius_m`
