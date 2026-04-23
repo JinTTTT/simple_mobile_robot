@@ -18,7 +18,10 @@ public:
   {
     lookahead_distance_ = this->declare_parameter<double>("lookahead_distance", 0.35);
     max_linear_speed_ = this->declare_parameter<double>("max_linear_speed", 0.20);
+    min_linear_speed_ = this->declare_parameter<double>("min_linear_speed", 0.05);
     max_angular_speed_ = this->declare_parameter<double>("max_angular_speed", 0.80);
+    curvature_slowdown_gain_ =
+      this->declare_parameter<double>("curvature_slowdown_gain", 0.60);
     initial_alignment_angle_threshold_ =
       this->declare_parameter<double>("initial_alignment_angle_threshold", 0.10);
     rotate_in_place_angle_threshold_ =
@@ -161,9 +164,12 @@ private:
 
     const double dx = target_x - robot_x;
     const double dy = target_y - robot_y;
-    const double target_distance = std::sqrt(dx * dx + dy * dy);
     const double target_bearing = std::atan2(dy, dx);
     const double heading_error = normalizeAngle(target_bearing - robot_yaw);
+    const double target_x_robot =
+      std::cos(robot_yaw) * dx + std::sin(robot_yaw) * dy;
+    const double target_y_robot =
+      -std::sin(robot_yaw) * dx + std::cos(robot_yaw) * dy;
 
     geometry_msgs::msg::Twist cmd_vel;
 
@@ -194,23 +200,26 @@ private:
         -max_angular_speed_,
         max_angular_speed_);
     } else {
-      const double curvature = (target_distance > 1e-6) ?
-        2.0 * std::sin(heading_error) / target_distance : 0.0;
+      const double lookahead_distance_squared =
+        target_x_robot * target_x_robot + target_y_robot * target_y_robot;
+      const double curvature = (lookahead_distance_squared > 1e-6) ?
+        2.0 * target_y_robot / lookahead_distance_squared : 0.0;
+      const double curvature_speed =
+        max_linear_speed_ / (1.0 + curvature_slowdown_gain_ * std::abs(curvature));
 
-      const double distance_scale = std::min(target_distance / lookahead_distance_, 1.0);
-      const double angle_scale = std::max(
-        0.0,
-        1.0 - std::abs(heading_error) / rotate_in_place_angle_threshold_);
+      cmd_vel.linear.x = std::max(min_linear_speed_, curvature_speed);
 
-      cmd_vel.linear.x = max_linear_speed_ * distance_scale * angle_scale;
+      if (goal_distance < slow_down_goal_distance_) {
+        const double goal_speed =
+          max_linear_speed_ * (goal_distance / slow_down_goal_distance_);
+        cmd_vel.linear.x = std::min(cmd_vel.linear.x, goal_speed);
+      }
+
+      cmd_vel.linear.x = clamp(cmd_vel.linear.x, 0.0, max_linear_speed_);
       cmd_vel.angular.z = clamp(
         cmd_vel.linear.x * curvature,
         -max_angular_speed_,
         max_angular_speed_);
-
-      if (goal_distance < slow_down_goal_distance_) {
-        cmd_vel.linear.x *= goal_distance / slow_down_goal_distance_;
-      }
     }
 
     cmd_vel_pub_->publish(cmd_vel);
@@ -468,7 +477,9 @@ private:
 
   double lookahead_distance_ = 0.35;
   double max_linear_speed_ = 0.20;
+  double min_linear_speed_ = 0.05;
   double max_angular_speed_ = 0.80;
+  double curvature_slowdown_gain_ = 0.60;
   double initial_alignment_angle_threshold_ = 0.10;
   double rotate_in_place_angle_threshold_ = 0.50;
   double rotate_in_place_gain_ = 1.50;
