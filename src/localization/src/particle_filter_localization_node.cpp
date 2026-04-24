@@ -130,18 +130,46 @@ ParticleFilterParameters ParticleFilterLocalizationNode::loadParticleFilterParam
         this->declare_parameter<double>("resample_xy_noise_std", 0.02);
     parameters.resample_theta_noise_std =
         this->declare_parameter<double>("resample_theta_noise_std", 0.03);
-    parameters.normal_recovery_particle_fraction =
+    parameters.recovery_score_high =
         std::clamp(
-            this->declare_parameter<double>("normal_recovery_particle_fraction", 0.02),
+            this->declare_parameter<double>("recovery_score_high", 0.99),
             0.0,
             1.0);
-    parameters.lost_recovery_particle_fraction =
+    parameters.recovery_score_medium =
         std::clamp(
-            this->declare_parameter<double>("lost_recovery_particle_fraction", 0.30),
+            this->declare_parameter<double>("recovery_score_medium", 0.90),
             0.0,
             1.0);
-    parameters.lost_score_threshold =
-        std::clamp(this->declare_parameter<double>("lost_score_threshold", 0.90), 0.0, 1.0);
+    parameters.recovery_score_low =
+        std::clamp(
+            this->declare_parameter<double>("recovery_score_low", 0.80),
+            0.0,
+            1.0);
+    parameters.recovery_score_min =
+        std::clamp(
+            this->declare_parameter<double>("recovery_score_min", 0.70),
+            0.0,
+            1.0);
+    parameters.recovery_fraction_high =
+        std::clamp(
+            this->declare_parameter<double>("recovery_fraction_high", 0.0),
+            0.0,
+            1.0);
+    parameters.recovery_fraction_medium =
+        std::clamp(
+            this->declare_parameter<double>("recovery_fraction_medium", 0.10),
+            0.0,
+            1.0);
+    parameters.recovery_fraction_low =
+        std::clamp(
+            this->declare_parameter<double>("recovery_fraction_low", 0.30),
+            0.0,
+            1.0);
+    parameters.recovery_fraction_min =
+        std::clamp(
+            this->declare_parameter<double>("recovery_fraction_min", 0.50),
+            0.0,
+            1.0);
     return parameters;
 }
 

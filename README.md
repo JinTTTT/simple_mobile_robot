@@ -80,7 +80,10 @@ Simple logic:
 - builds a likelihood field from the map
 - moves particles using odometry with small motion noise
 - scores particles using laser scans
-- resamples after robot movement
+- resamples after each laser scan so scan data can improve the estimate even while the robot is still
+- injects random recovery particles from free map cells when the best scan score drops
+- estimates pose from the best weighted particles instead of averaging the whole cloud
+- prints particle scan score statistics for debugging
 - publishes the estimated pose and the normal ROS `map -> odom` transform
 
 The Kalman-filter node assumes a known initial pose of `0, 0, 0`.

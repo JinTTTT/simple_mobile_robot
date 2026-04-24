@@ -13,9 +13,14 @@ particle_filter_localization_node:
     rotation_noise_base: 0.002
     resample_xy_noise_std: 0.02
     resample_theta_noise_std: 0.03
-    normal_recovery_particle_fraction: 0.02
-    lost_recovery_particle_fraction: 0.30
-    lost_score_threshold: 0.90
+    recovery_score_high: 0.99
+    recovery_score_medium: 0.90
+    recovery_score_low: 0.80
+    recovery_score_min: 0.70
+    recovery_fraction_high: 0.0
+    recovery_fraction_medium: 0.10
+    recovery_fraction_low: 0.30
+    recovery_fraction_min: 0.50
 
 kalman_localization_node:
   ros__parameters:

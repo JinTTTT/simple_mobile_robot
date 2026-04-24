@@ -20,9 +20,14 @@ struct ParticleFilterParameters {
     double rotation_noise_base = 0.002;
     double resample_xy_noise_std = 0.02;
     double resample_theta_noise_std = 0.03;
-    double normal_recovery_particle_fraction = 0.02;
-    double lost_recovery_particle_fraction = 0.30;
-    double lost_score_threshold = 0.90;
+    double recovery_score_high = 0.99;
+    double recovery_score_medium = 0.90;
+    double recovery_score_low = 0.80;
+    double recovery_score_min = 0.70;
+    double recovery_fraction_high = 0.0;
+    double recovery_fraction_medium = 0.10;
+    double recovery_fraction_low = 0.30;
+    double recovery_fraction_min = 0.50;
 };
 
 struct Particle {

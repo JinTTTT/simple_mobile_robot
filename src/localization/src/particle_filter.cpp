@@ -16,7 +16,7 @@ void ParticleFilter::configure(const ParticleFilterParameters & parameters)
     parameters_ = parameters;
     rng_.seed(parameters_.random_seed);
     particles_.resize(parameters_.num_particles);
-    current_recovery_particle_fraction_ = parameters_.normal_recovery_particle_fraction;
+    current_recovery_particle_fraction_ = parameters_.recovery_fraction_high;
 }
 
 void ParticleFilter::initializeUniform(const nav_msgs::msg::OccupancyGrid & map)
@@ -240,14 +240,39 @@ Particle ParticleFilter::sampleRandomFreeParticle()
 void ParticleFilter::updateRecoveryFraction(double best_score)
 {
     if (!std::isfinite(best_score)) {
-        current_recovery_particle_fraction_ = parameters_.lost_recovery_particle_fraction;
+        current_recovery_particle_fraction_ = parameters_.recovery_fraction_min;
         return;
     }
 
+    if (best_score >= parameters_.recovery_score_high) {
+        current_recovery_particle_fraction_ = parameters_.recovery_fraction_high;
+    } else if (best_score >= parameters_.recovery_score_medium) {
+        const double ratio =
+            (parameters_.recovery_score_high - best_score) /
+            (parameters_.recovery_score_high - parameters_.recovery_score_medium);
+        current_recovery_particle_fraction_ =
+            parameters_.recovery_fraction_high +
+            ratio * (parameters_.recovery_fraction_medium - parameters_.recovery_fraction_high);
+    } else if (best_score >= parameters_.recovery_score_low) {
+        const double ratio =
+            (parameters_.recovery_score_medium - best_score) /
+            (parameters_.recovery_score_medium - parameters_.recovery_score_low);
+        current_recovery_particle_fraction_ =
+            parameters_.recovery_fraction_medium +
+            ratio * (parameters_.recovery_fraction_low - parameters_.recovery_fraction_medium);
+    } else if (best_score >= parameters_.recovery_score_min) {
+        const double ratio =
+            (parameters_.recovery_score_low - best_score) /
+            (parameters_.recovery_score_low - parameters_.recovery_score_min);
+        current_recovery_particle_fraction_ =
+            parameters_.recovery_fraction_low +
+            ratio * (parameters_.recovery_fraction_min - parameters_.recovery_fraction_low);
+    } else {
+        current_recovery_particle_fraction_ = parameters_.recovery_fraction_min;
+    }
+
     current_recovery_particle_fraction_ =
-        best_score < parameters_.lost_score_threshold ?
-        parameters_.lost_recovery_particle_fraction :
-        parameters_.normal_recovery_particle_fraction;
+        std::clamp(current_recovery_particle_fraction_, 0.0, 1.0);
 }
 
 EstimatedPose ParticleFilter::estimatePose() const
@@ -277,17 +302,36 @@ EstimatedPose ParticleFilter::estimatePose() const
     double sum_y = 0.0;
     double sum_sin = 0.0;
     double sum_cos = 0.0;
+    double sum_weight = 0.0;
 
     for (std::size_t i = 0; i < particles_to_average; ++i) {
         const Particle & p = best_particles[i];
-        sum_x += p.x;
-        sum_y += p.y;
-        sum_sin += std::sin(p.theta);
-        sum_cos += std::cos(p.theta);
+        sum_x += p.x * p.weight;
+        sum_y += p.y * p.weight;
+        sum_sin += std::sin(p.theta) * p.weight;
+        sum_cos += std::cos(p.theta) * p.weight;
+        sum_weight += p.weight;
     }
 
-    pose.x = sum_x / particles_to_average;
-    pose.y = sum_y / particles_to_average;
+    if (sum_weight <= 0.0 || !std::isfinite(sum_weight)) {
+        sum_x = 0.0;
+        sum_y = 0.0;
+        sum_sin = 0.0;
+        sum_cos = 0.0;
+
+        for (std::size_t i = 0; i < particles_to_average; ++i) {
+            const Particle & p = best_particles[i];
+            sum_x += p.x;
+            sum_y += p.y;
+            sum_sin += std::sin(p.theta);
+            sum_cos += std::cos(p.theta);
+        }
+
+        sum_weight = static_cast<double>(particles_to_average);
+    }
+
+    pose.x = sum_x / sum_weight;
+    pose.y = sum_y / sum_weight;
     pose.theta = std::atan2(sum_sin, sum_cos);
 
     return pose;

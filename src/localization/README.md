@@ -39,6 +39,7 @@ As the robot moves, odometry moves every particle with noise.
 When a scan arrives, each particle is scored by checking whether laser hits land near occupied map cells.
 Better particles get higher weights.
 The filter then resamples so good pose guesses survive and bad pose guesses disappear.
+It also adds random recovery particles from free map cells when the best scan score drops, so the filter can search again instead of staying confidently wrong.
 
 ### Interfaces
 
@@ -63,6 +64,7 @@ Cells near walls have high values.
 Cells far from walls have low values.
 
 `/estimated_pose` is the current best pose estimate from the particle cloud.
+It is computed from the best-scoring particles, weighted by scan score, so random recovery particles have less effect on the published pose.
 
 ### Characteristics
 
@@ -89,15 +91,32 @@ The current implementation uses:
 - likelihood field construction from the occupancy grid map
 - odometry motion model with sampled translation and rotation noise
 - scan likelihood scoring using every 10th laser beam
-- stochastic universal resampling
-- pose averaging with sine and cosine for heading
+- scan-score logging for debugging
+- stochastic universal resampling after each scan
+- score-based recovery particle injection from free map cells
+- weighted pose averaging over the best-scoring particles, with sine and cosine for heading
 
 Stochastic universal resampling is also called low-variance resampling.
 It walks through the normalized particle weights with evenly spaced pointers.
 This keeps more copies of high-weight particles while reducing random sampling noise.
 
+The pose estimate first sorts particles by scan weight and averages the best 20 percent.
+Within that group, higher-weight particles pull the estimate more strongly.
 The estimated heading is averaged with `sin(theta)` and `cos(theta)`.
 This avoids the angle wraparound problem where `179 degrees` and `-179 degrees` are almost the same direction but a normal average would be wrong.
+
+Recovery particles are controlled by the best scan score.
+With the default configuration:
+
+```text
+best score >= 0.99 -> 0% random recovery particles
+best score  = 0.90 -> 10% random recovery particles
+best score  = 0.80 -> 30% random recovery particles
+best score <= 0.70 -> 50% random recovery particles
+```
+
+Values between these score points are interpolated smoothly.
+For example, with 500 particles and a 30 percent recovery fraction, about 150 particles are sampled randomly from free map cells.
 
 The node publishes `map -> odom` with:
 
@@ -125,6 +144,7 @@ Main parameters:
 - movement threshold before motion update: `0.001`
 - resampling position noise: `0.02 m`
 - resampling heading noise: `0.03 rad`
+- recovery score ramp: `0.99 -> 0%`, `0.90 -> 10%`, `0.80 -> 30%`, `0.70 -> 50%`
 
 The parameter names are:
 
@@ -141,6 +161,14 @@ The parameter names are:
 - `rotation_noise_base`
 - `resample_xy_noise_std`
 - `resample_theta_noise_std`
+- `recovery_score_high`
+- `recovery_score_medium`
+- `recovery_score_low`
+- `recovery_score_min`
+- `recovery_fraction_high`
+- `recovery_fraction_medium`
+- `recovery_fraction_low`
+- `recovery_fraction_min`
 
 ### Run and Visualize
 
