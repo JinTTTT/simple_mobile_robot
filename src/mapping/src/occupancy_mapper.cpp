@@ -8,13 +8,12 @@ void OccupancyMapper::configure(const Config & config)
   config_ = config;
   map_log_odds_.assign(config_.width * config_.height, 0.0);
 
-  const double p_hit_occ = config_.hit_probability;
-  const double p_pass_occ = 1.0 - p_hit_occ;
-  const double p_hit_free = config_.free_probability;
-  const double p_pass_free = 1.0 - p_hit_free;
-
-  log_odds_hit_ = std::log(p_hit_occ / p_hit_free);
-  log_odds_pass_ = std::log(p_pass_occ / p_pass_free);
+  // Use a standard inverse sensor model:
+  // - hit_probability is the occupancy probability added at the laser endpoint
+  // - free_probability is the occupancy probability added along free space
+  //   and should therefore stay below 0.5, producing a negative log-odds increment
+  log_odds_hit_ = std::log(config_.hit_probability / (1.0 - config_.hit_probability));
+  log_odds_pass_ = std::log(config_.free_probability / (1.0 - config_.free_probability));
 }
 
 bool OccupancyMapper::worldToGrid(double wx, double wy, int & gx, int & gy) const

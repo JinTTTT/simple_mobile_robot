@@ -5,8 +5,10 @@
     height: 500
     origin_x: -12.5
     origin_y: -12.5
-    hit_probability: 0.90
-    free_probability: 0.05
+    hit_probability: 0.70
+    free_probability: 0.35
     log_odds_min: -10.0
     log_odds_max: 10.0
     publish_period_ms: 500
+    use_ground_truth_pose: false
+    ground_truth_topic: /ground_truth_pose

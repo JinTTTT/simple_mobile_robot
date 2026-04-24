@@ -45,12 +45,17 @@ The mapper node subscribes to:
 - `/scan`: `sensor_msgs/msg/LaserScan`
 - TF: `odom -> base_link`
 
+Optional temporary simulator-only pose source:
+
+- `/ground_truth_pose`: `geometry_msgs/msg/PoseStamped`
+
 It publishes:
 
 - `/map`: `nav_msgs/msg/OccupancyGrid`
 
 The `/map` publisher uses transient local QoS.
 Late subscribers such as RViz or map saving tools can receive the latest map after connecting.
+By default the mapper uses TF odometry. For simulator testing only, it can be switched to `/ground_truth_pose` in `config/mapping.yaml`.
 
 ### Characteristics
 
@@ -101,8 +106,8 @@ The main values are:
 - map height: `500 cells`
 - map origin: centered around `(0, 0)`
 - publish period: `500 ms`
-- occupied hit probability: `0.90`
-- free hit probability: `0.05`
+- occupied update probability: `0.70`
+- free-space update probability: `0.35`
 - log-odds clamp: `-10.0` to `10.0`
 
 - `resolution`
@@ -115,6 +120,8 @@ The main values are:
 - `free_probability`
 - `log_odds_min`
 - `log_odds_max`
+- `use_ground_truth_pose`
+- `ground_truth_topic`
 
 ### Run and Visualize
 

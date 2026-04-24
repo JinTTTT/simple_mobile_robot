@@ -1,5 +1,6 @@
 #include "mapping/occupancy_mapper.hpp"
 
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -31,6 +32,9 @@ public:
     config.log_odds_min = declare_parameter<double>("log_odds_min", -10.0);
     config.log_odds_max = declare_parameter<double>("log_odds_max", 10.0);
     const int publish_period_ms = declare_parameter<int>("publish_period_ms", 500);
+    use_ground_truth_pose_ = declare_parameter<bool>("use_ground_truth_pose", false);
+    ground_truth_topic_ = declare_parameter<std::string>(
+      "ground_truth_topic", "/ground_truth_pose");
 
     mapper_.configure(config);
 
@@ -41,6 +45,12 @@ public:
       "/scan",
       10,
       std::bind(&OccupancyMapperNode::scanCallback, this, std::placeholders::_1));
+    if (use_ground_truth_pose_) {
+      ground_truth_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+        ground_truth_topic_,
+        10,
+        std::bind(&OccupancyMapperNode::groundTruthCallback, this, std::placeholders::_1));
+    }
 
     const auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
     map_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/map", qos);
@@ -59,11 +69,28 @@ public:
       publish_period_ms);
     RCLCPP_INFO(
       get_logger(),
-      "Using TF lookup odom -> base_link and publishing /map in frame map.");
+      "Pose source for mapping: %s.",
+      use_ground_truth_pose_ ? ground_truth_topic_.c_str() : "TF odom -> base_link");
   }
 
 private:
+  void groundTruthCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+  {
+    latest_ground_truth_pose_ = *msg;
+    has_ground_truth_pose_ = true;
+  }
+
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
+  {
+    if (use_ground_truth_pose_) {
+      handleScanWithGroundTruth(*msg);
+      return;
+    }
+
+    handleScanWithTf(*msg);
+  }
+
+  void handleScanWithTf(const sensor_msgs::msg::LaserScan & scan)
   {
     geometry_msgs::msg::TransformStamped transform_stamped;
 
@@ -71,7 +98,7 @@ private:
       transform_stamped = tf_buffer_->lookupTransform(
         "odom",
         "base_link",
-        msg->header.stamp,
+        scan.header.stamp,
         rclcpp::Duration::from_seconds(0.1));
     } catch (const tf2::TransformException & ex) {
       RCLCPP_WARN_THROTTLE(
@@ -108,7 +135,47 @@ private:
       return;
     }
 
-    mapper_.updateWithScan(*msg, robot_x, robot_y, robot_theta);
+    mapper_.updateWithScan(scan, robot_x, robot_y, robot_theta);
+  }
+
+  void handleScanWithGroundTruth(const sensor_msgs::msg::LaserScan & scan)
+  {
+    if (!has_ground_truth_pose_) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        1000,
+        "Waiting for %s before mapping.",
+        ground_truth_topic_.c_str());
+      return;
+    }
+
+    const double robot_x = latest_ground_truth_pose_.pose.position.x;
+    const double robot_y = latest_ground_truth_pose_.pose.position.y;
+
+    tf2::Quaternion q(
+      latest_ground_truth_pose_.pose.orientation.x,
+      latest_ground_truth_pose_.pose.orientation.y,
+      latest_ground_truth_pose_.pose.orientation.z,
+      latest_ground_truth_pose_.pose.orientation.w);
+    tf2::Matrix3x3 m(q);
+    double roll = 0.0;
+    double pitch = 0.0;
+    double robot_theta = 0.0;
+    m.getRPY(roll, pitch, robot_theta);
+
+    int robot_grid_x = 0;
+    int robot_grid_y = 0;
+    if (!mapper_.worldToGrid(robot_x, robot_y, robot_grid_x, robot_grid_y)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        1000,
+        "Robot is outside map bounds. Skipping scan.");
+      return;
+    }
+
+    mapper_.updateWithScan(scan, robot_x, robot_y, robot_theta);
   }
 
   void publishMap()
@@ -120,8 +187,13 @@ private:
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr ground_truth_sub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  geometry_msgs::msg::PoseStamped latest_ground_truth_pose_;
+  bool has_ground_truth_pose_ = false;
+  bool use_ground_truth_pose_ = false;
+  std::string ground_truth_topic_;
 };
 
 int main(int argc, char ** argv)
