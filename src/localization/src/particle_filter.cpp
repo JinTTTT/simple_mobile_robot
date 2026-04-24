@@ -193,7 +193,6 @@ void ParticleFilter::resample()
         copied.x += xy_noise(rng_);
         copied.y += xy_noise(rng_);
         copied.theta = normalizeAngle(copied.theta + theta_noise(rng_));
-        copied.weight = 1.0 / parameters_.num_particles;
 
         new_particles.push_back(copied);
         pointer += step;
@@ -262,20 +261,33 @@ EstimatedPose ParticleFilter::estimatePose() const
         return pose;
     }
 
+    std::vector<Particle> best_particles = particles_;
+    std::sort(
+        best_particles.begin(),
+        best_particles.end(),
+        [](const Particle & a, const Particle & b) {
+            return a.weight > b.weight;
+        });
+
+    const std::size_t particles_to_average = std::max<std::size_t>(
+        1,
+        static_cast<std::size_t>(std::ceil(best_particles.size() * 0.20)));
+
     double sum_x = 0.0;
     double sum_y = 0.0;
     double sum_sin = 0.0;
     double sum_cos = 0.0;
 
-    for (const auto & p : particles_) {
+    for (std::size_t i = 0; i < particles_to_average; ++i) {
+        const Particle & p = best_particles[i];
         sum_x += p.x;
         sum_y += p.y;
         sum_sin += std::sin(p.theta);
         sum_cos += std::cos(p.theta);
     }
 
-    pose.x = sum_x / particles_.size();
-    pose.y = sum_y / particles_.size();
+    pose.x = sum_x / particles_to_average;
+    pose.y = sum_y / particles_to_average;
     pose.theta = std::atan2(sum_sin, sum_cos);
 
     return pose;

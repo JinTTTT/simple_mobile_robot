@@ -141,7 +141,7 @@ ParticleFilterParameters ParticleFilterLocalizationNode::loadParticleFilterParam
             0.0,
             1.0);
     parameters.lost_score_threshold =
-        std::clamp(this->declare_parameter<double>("lost_score_threshold", 0.25), 0.0, 1.0);
+        std::clamp(this->declare_parameter<double>("lost_score_threshold", 0.90), 0.0, 1.0);
     return parameters;
 }
 

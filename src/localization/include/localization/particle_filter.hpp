@@ -22,7 +22,7 @@ struct ParticleFilterParameters {
     double resample_theta_noise_std = 0.03;
     double normal_recovery_particle_fraction = 0.02;
     double lost_recovery_particle_fraction = 0.30;
-    double lost_score_threshold = 0.25;
+    double lost_score_threshold = 0.90;
 };
 
 struct Particle {
