@@ -88,8 +88,13 @@ Hit evidence increases the cell value.
 
 ### Parameters
 
-The mapper does not declare ROS parameters yet.
-The important values are hard-coded in the source:
+Main mapper tuning now lives in:
+
+```text
+src/mapping/config/mapping.yaml
+```
+
+The main values are:
 
 - map resolution: `0.05 m`
 - map width: `500 cells`
@@ -100,14 +105,12 @@ The important values are hard-coded in the source:
 - free hit probability: `0.05`
 - log-odds clamp: `-10.0` to `10.0`
 
-Potential future ROS parameters:
-
 - `resolution`
 - `width`
 - `height`
 - `origin_x`
 - `origin_y`
-- `publish_rate`
+- `publish_period_ms`
 - `hit_probability`
 - `free_probability`
 - `log_odds_min`
@@ -146,7 +149,13 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 Start the mapper:
 
 ```bash
-ros2 run mapping occupancy_mapper
+ros2 run mapping occupancy_mapper_node
+```
+
+or:
+
+```bash
+ros2 launch mapping mapping.launch.py
 ```
 
 Start RViz:
@@ -231,8 +240,6 @@ Current issues:
 - there is no loop closure
 - there is no map optimization
 - moving or removed obstacles are not handled well
-- mapper tuning values are hard-coded
-- the launch file currently provides the static `map -> odom` transform but does not start `occupancy_mapper`
 - the generated PGM map is better than the live map for current localization testing
 
 Potential improvements:
@@ -244,3 +251,16 @@ Potential improvements:
 - add dynamic obstacle handling
 - add SLAM-style pose correction or loop closure
 - add tests for world-to-grid conversion, Bresenham ray tracing, and log-odds updates
+
+## Package Layout
+
+Main package files:
+
+- `src/occupancy_mapper_node.cpp`: ROS node wiring, TF lookup, publishers, parameter loading
+- `src/occupancy_mapper.cpp`: occupancy-grid update logic
+- `include/mapping/occupancy_mapper.hpp`: mapper interface
+- `config/mapping.yaml`: live mapper parameters
+
+Learning / history files:
+
+- `experiments/occupancy_mapper_simple_count_method.cpp`: older hit/pass count mapper kept for comparison

@@ -12,6 +12,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
 if(BUILD_TESTING)
@@ -26,30 +27,49 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-# Create executable
-add_executable(
-  occupancy_mapper src/occupancy_mapper.cpp
+add_library(occupancy_mapper_lib
+  src/occupancy_mapper.cpp
 )
-  
 
-# Link dependencies
-ament_target_dependencies(occupancy_mapper
+target_include_directories(occupancy_mapper_lib PUBLIC
+  include
+)
+
+ament_target_dependencies(occupancy_mapper_lib
+  nav_msgs
+  sensor_msgs
+)
+
+add_executable(occupancy_mapper_node
+  src/occupancy_mapper_node.cpp
+)
+
+target_include_directories(occupancy_mapper_node PUBLIC
+  include
+)
+
+target_link_libraries(occupancy_mapper_node
+  occupancy_mapper_lib
+)
+
+ament_target_dependencies(occupancy_mapper_node
   rclcpp
   sensor_msgs
   nav_msgs
   geometry_msgs
+  tf2
   tf2_ros
   tf2_geometry_msgs
 )
 
-# Install executable
 install(TARGETS
-  occupancy_mapper
+  occupancy_mapper_lib
+  occupancy_mapper_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install launch files
 install(DIRECTORY
+  config
   launch
   DESTINATION share/${PROJECT_NAME}
 )

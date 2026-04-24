@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    resolution: 0.05
+    width: 500
+    height: 500
+    origin_x: -12.5
+    origin_y: -12.5
+    hit_probability: 0.90
+    free_probability: 0.05
+    log_odds_min: -10.0
+    log_odds_max: 10.0
+    publish_period_ms: 500

@@ -3,7 +3,7 @@
 <package format="3">
   <name>mapping</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Learning package for 2D occupancy-grid mapping and static map generation.</description>
   <maintainer email="tj19970215@gmail.com">jtao</maintainer>
   <license>TODO: License declaration</license>
 
@@ -13,6 +13,7 @@
   <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
   <depend>tf2_ros</depend>
 
   <test_depend>ament_lint_auto</test_depend>
