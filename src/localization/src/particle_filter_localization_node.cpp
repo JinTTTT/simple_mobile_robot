@@ -130,6 +130,18 @@ ParticleFilterParameters ParticleFilterLocalizationNode::loadParticleFilterParam
         this->declare_parameter<double>("resample_xy_noise_std", 0.02);
     parameters.resample_theta_noise_std =
         this->declare_parameter<double>("resample_theta_noise_std", 0.03);
+    parameters.normal_recovery_particle_fraction =
+        std::clamp(
+            this->declare_parameter<double>("normal_recovery_particle_fraction", 0.02),
+            0.0,
+            1.0);
+    parameters.lost_recovery_particle_fraction =
+        std::clamp(
+            this->declare_parameter<double>("lost_recovery_particle_fraction", 0.30),
+            0.0,
+            1.0);
+    parameters.lost_score_threshold =
+        std::clamp(this->declare_parameter<double>("lost_score_threshold", 0.25), 0.0, 1.0);
     return parameters;
 }
 
@@ -187,11 +199,19 @@ void ParticleFilterLocalizationNode::scanCallback(const sensor_msgs::msg::LaserS
 {
     if (!map_received_) return;
 
-    pf_.scoreParticlesWithScan(*msg);
-    if (particles_moved_since_last_resample_) {
-        pf_.resample();
-        particles_moved_since_last_resample_ = false;
-    }
+    ScanScoreStats stats = pf_.scoreParticlesWithScan(*msg);
+    RCLCPP_INFO_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        1000,
+        "Particle scan score: best=%.3f average=%.3f worst=%.3f",
+        stats.best_score,
+        stats.average_score,
+        stats.worst_score);
+
+    pf_.resample();
+    particles_moved_since_last_resample_ = false;
+
     publishParticles();
     publishEstimatedPose();
     publishMapToOdomTf();

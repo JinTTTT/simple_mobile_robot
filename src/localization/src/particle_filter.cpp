@@ -16,40 +16,19 @@ void ParticleFilter::configure(const ParticleFilterParameters & parameters)
     parameters_ = parameters;
     rng_.seed(parameters_.random_seed);
     particles_.resize(parameters_.num_particles);
+    current_recovery_particle_fraction_ = parameters_.normal_recovery_particle_fraction;
 }
 
 void ParticleFilter::initializeUniform(const nav_msgs::msg::OccupancyGrid & map)
 {
-    // Extract map properties
-    double res    = map.info.resolution;
-    int    width  = map.info.width;
-    int    height = map.info.height;
-    double orig_x = map.info.origin.position.x;
-    double orig_y = map.info.origin.position.y;
+    rememberFreeCells(map);
 
-    // Random number generators
-    std::uniform_int_distribution<int> rand_col(0, width - 1);
-    std::uniform_int_distribution<int> rand_row(0, height - 1);
-    std::uniform_real_distribution<double> rand_theta(-M_PI, M_PI);
+    if (free_cells_.empty()) {
+        return;
+    }
 
-    int placed = 0;
-    while (placed < parameters_.num_particles) {
-        int col = rand_col(rng_);
-        int row = rand_row(rng_);
-
-        // map.data is a flat array: index = row * width + col
-        // value 0 = free, 100 = occupied, -1 = unknown
-        int index = row * width + col;
-        if (map.data[index] != 0) {
-            continue;  // skip occupied and unknown cells
-        }
-
-        // Convert grid cell back to world coordinates
-        particles_[placed].x     = orig_x + (col + 0.5) * res;
-        particles_[placed].y     = orig_y + (row + 0.5) * res;
-        particles_[placed].theta = rand_theta(rng_);
-        particles_[placed].weight = 1.0 / parameters_.num_particles;
-        placed++;
+    for (auto & p : particles_) {
+        p = sampleRandomFreeParticle();
     }
 }
 
@@ -66,9 +45,12 @@ void ParticleFilter::sampleMotionModel(
     // 1. rotate to face the direction of travel
     // 2. translate forward
     // 3. rotate to final heading
-    double delta_rot1  = std::atan2(new_y - old_y, new_x - old_x) - old_theta;
+    double delta_rot1 = 0.0;
     double delta_trans = std::sqrt(std::pow(new_x - old_x, 2) + std::pow(new_y - old_y, 2));
-    double delta_rot2  = new_theta - old_theta - delta_rot1;
+    if (delta_trans > 1e-6) {
+        delta_rot1 = normalizeAngle(std::atan2(new_y - old_y, new_x - old_x) - old_theta);
+    }
+    double delta_rot2 = normalizeAngle(new_theta - old_theta - delta_rot1);
 
     double trans_noise_std =
         parameters_.translation_noise_from_translation * delta_trans +
@@ -139,11 +121,12 @@ ScanScoreStats ParticleFilter::scoreParticlesWithScan(const sensor_msgs::msg::La
         stats.worst_score = std::min(stats.worst_score, particle_score);
     }
 
-    stats.average_score = score_sum / particles_.size();
-
     if (stats.worst_score == std::numeric_limits<double>::max()) {
         stats.worst_score = 0.0;
     }
+
+    stats.average_score = score_sum / particles_.size();
+    updateRecoveryFraction(stats.best_score);
 
     return stats;
 }
@@ -160,7 +143,11 @@ void ParticleFilter::resample()
         for (auto & p : particles_) {
             p.weight = equal_weight;
         }
-        return;
+        weight_sum = 1.0;
+
+        if (free_cells_.empty()) {
+            return;
+        }
     }
 
     std::vector<double> cumulative_weights;
@@ -180,6 +167,7 @@ void ParticleFilter::resample()
     std::normal_distribution<double> theta_noise(0.0, parameters_.resample_theta_noise_std);
     std::uniform_real_distribution<double> start_distribution(
         0.0, 1.0 / parameters_.num_particles);
+    std::uniform_real_distribution<double> recovery_distribution(0.0, 1.0);
 
     std::vector<Particle> new_particles;
     new_particles.reserve(parameters_.num_particles);
@@ -189,6 +177,13 @@ void ParticleFilter::resample()
     size_t particle_index = 0;
 
     for (int i = 0; i < parameters_.num_particles; ++i) {
+        if (!free_cells_.empty() &&
+            recovery_distribution(rng_) < current_recovery_particle_fraction_) {
+            new_particles.push_back(sampleRandomFreeParticle());
+            pointer += step;
+            continue;
+        }
+
         while (pointer > cumulative_weights[particle_index]) {
             particle_index++;
         }
@@ -205,6 +200,55 @@ void ParticleFilter::resample()
     }
 
     particles_ = new_particles;
+}
+
+void ParticleFilter::rememberFreeCells(const nav_msgs::msg::OccupancyGrid & map)
+{
+    map_resolution_ = map.info.resolution;
+    map_origin_x_ = map.info.origin.position.x;
+    map_origin_y_ = map.info.origin.position.y;
+    free_cells_.clear();
+
+    const int width = map.info.width;
+    const int height = map.info.height;
+    free_cells_.reserve(map.data.size());
+
+    for (int row = 0; row < height; ++row) {
+        for (int col = 0; col < width; ++col) {
+            const int index = row * width + col;
+            if (map.data[index] == 0) {
+                free_cells_.push_back({col, row});
+            }
+        }
+    }
+}
+
+Particle ParticleFilter::sampleRandomFreeParticle()
+{
+    std::uniform_int_distribution<std::size_t> rand_cell(0, free_cells_.size() - 1);
+    std::uniform_real_distribution<double> rand_theta(-M_PI, M_PI);
+
+    const FreeCell & cell = free_cells_[rand_cell(rng_)];
+
+    Particle particle;
+    particle.x = map_origin_x_ + (cell.col + 0.5) * map_resolution_;
+    particle.y = map_origin_y_ + (cell.row + 0.5) * map_resolution_;
+    particle.theta = rand_theta(rng_);
+    particle.weight = 1.0 / parameters_.num_particles;
+    return particle;
+}
+
+void ParticleFilter::updateRecoveryFraction(double best_score)
+{
+    if (!std::isfinite(best_score)) {
+        current_recovery_particle_fraction_ = parameters_.lost_recovery_particle_fraction;
+        return;
+    }
+
+    current_recovery_particle_fraction_ =
+        best_score < parameters_.lost_score_threshold ?
+        parameters_.lost_recovery_particle_fraction :
+        parameters_.normal_recovery_particle_fraction;
 }
 
 EstimatedPose ParticleFilter::estimatePose() const

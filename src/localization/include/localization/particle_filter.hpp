@@ -20,6 +20,9 @@ struct ParticleFilterParameters {
     double rotation_noise_base = 0.002;
     double resample_xy_noise_std = 0.02;
     double resample_theta_noise_std = 0.03;
+    double normal_recovery_particle_fraction = 0.02;
+    double lost_recovery_particle_fraction = 0.30;
+    double lost_score_threshold = 0.25;
 };
 
 struct Particle {
@@ -67,8 +70,22 @@ public:
     const std::vector<Particle> & particles() const;
 
 private:
+    struct FreeCell {
+        int col;
+        int row;
+    };
+
+    void rememberFreeCells(const nav_msgs::msg::OccupancyGrid & map);
+    Particle sampleRandomFreeParticle();
+    void updateRecoveryFraction(double best_score);
+
     ParticleFilterParameters parameters_;
     std::vector<Particle> particles_;
+    std::vector<FreeCell> free_cells_;
     LikelihoodField likelihood_field_;
     std::default_random_engine rng_;
+    double map_resolution_ = 0.0;
+    double map_origin_x_ = 0.0;
+    double map_origin_y_ = 0.0;
+    double current_recovery_particle_fraction_ = 0.0;
 };
