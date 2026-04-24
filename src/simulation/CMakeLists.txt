@@ -7,9 +7,10 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(tf2_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -23,9 +24,22 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-# INSTALL THE FILES
-# This tells ROS: "Take everything in the 'launch' and 'urdf' folders
-# and put them where the system can find them."
+add_executable(ground_truth_pose_publisher
+  src/ground_truth_pose_publisher.cpp
+)
+
+ament_target_dependencies(ground_truth_pose_publisher
+  rclcpp
+  tf2_msgs
+  geometry_msgs
+  nav_msgs
+)
+
+install(TARGETS
+  ground_truth_pose_publisher
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 install(DIRECTORY 
   launch 
   urdf

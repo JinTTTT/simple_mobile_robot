@@ -37,7 +37,15 @@ def generate_launch_description():
             '/tf@tf2_msgs/msg/TFMessage@ignition.msgs.Pose_V',
             # Lidar scan: Gazebo → ROS 2 (sensor data)
             '/scan@sensor_msgs/msg/LaserScan@ignition.msgs.LaserScan',
+            # Ground truth world poses: Gazebo -> ROS 2
+            '/world/empty/dynamic_pose/info@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
         ],
+        output='screen'
+    )
+
+    ground_truth_pose_publisher = Node(
+        package='simulation',
+        executable='ground_truth_pose_publisher',
         output='screen'
     )
 
@@ -45,4 +53,5 @@ def generate_launch_description():
     return LaunchDescription([
         spawn_robot_launch,  # Include the existing launch file
         bridge,              # Add the bridge node
+        ground_truth_pose_publisher,
     ])
