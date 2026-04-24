@@ -1,10 +1,26 @@
 #pragma once
 
-#include <vector>
-#include <cmath>
-#include <random>
+#include "localization/likelihood_field.hpp"
+
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+
+#include <vector>
+#include <random>
+
+struct ParticleFilterParameters {
+    int num_particles = 500;
+    unsigned int random_seed = 42;
+    double likelihood_max_distance = 1.0;
+    std::size_t scan_beam_step = 10;
+    double translation_noise_from_translation = 0.02;
+    double translation_noise_base = 0.005;
+    double rotation_noise_from_rotation = 0.05;
+    double rotation_noise_from_translation = 0.01;
+    double rotation_noise_base = 0.002;
+    double resample_xy_noise_std = 0.02;
+    double resample_theta_noise_std = 0.03;
+};
 
 struct Particle {
     double x;
@@ -28,11 +44,14 @@ struct EstimatedPose {
 class ParticleFilter
 {
 public:
-    ParticleFilter(int num_particles);
+    explicit ParticleFilter(
+        const ParticleFilterParameters & parameters = ParticleFilterParameters());
 
-    void initUniform(const nav_msgs::msg::OccupancyGrid& map);
+    void configure(const ParticleFilterParameters & parameters);
 
-    void buildLikelihoodField(const nav_msgs::msg::OccupancyGrid& map);
+    void initializeUniform(const nav_msgs::msg::OccupancyGrid & map);
+
+    void buildLikelihoodField(const nav_msgs::msg::OccupancyGrid & map);
 
     void sampleMotionModel(double old_x, double old_y, double old_theta,
                             double new_x, double new_y, double new_theta);
@@ -43,17 +62,13 @@ public:
 
     EstimatedPose estimatePose() const;
 
-    const nav_msgs::msg::OccupancyGrid & getLikelihoodFieldMap() const;
+    const nav_msgs::msg::OccupancyGrid & likelihoodFieldMap() const;
     
-    const std::vector<Particle> & getParticles() const;
+    const std::vector<Particle> & particles() const;
 
 private:
-    bool worldToLikelihoodMap(double x, double y, int & col, int & row) const;
-    double likelihoodAtWorld(double x, double y) const;
-    double normalizeAngle(double angle) const;
-
-    int num_particles_;
+    ParticleFilterParameters parameters_;
     std::vector<Particle> particles_;
-    nav_msgs::msg::OccupancyGrid likelihood_field_map_;
+    LikelihoodField likelihood_field_;
     std::default_random_engine rng_;
 };

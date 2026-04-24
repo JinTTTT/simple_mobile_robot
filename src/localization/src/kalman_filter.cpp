@@ -1,4 +1,5 @@
 #include "localization/kalman_filter.hpp"
+#include "localization/geometry_utils.hpp"
 
 #include <cmath>
 
@@ -135,20 +136,4 @@ KalmanFilter::Matrix3x3 KalmanFilter::makeProcessNoise(
         0.0, square(std_y), 0.0,
         0.0, 0.0, square(std_theta)
     };
-}
-
-double KalmanFilter::normalizeAngle(double angle) const
-{
-    while (angle > M_PI) {
-        angle -= 2.0 * M_PI;
-    }
-    while (angle < -M_PI) {
-        angle += 2.0 * M_PI;
-    }
-    return angle;
-}
-
-double KalmanFilter::square(double value) const
-{
-    return value * value;
 }

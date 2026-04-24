@@ -50,8 +50,6 @@ public:
 private:
     Matrix3x3 makeInitialCovariance() const;
     Matrix3x3 makeProcessNoise(double distance, double rotation) const;
-    double normalizeAngle(double angle) const;
-    double square(double value) const;
 
     KalmanFilterParameters parameters_;
     KalmanPose state_;

@@ -20,7 +20,7 @@ public:
       "input_topic", "/world/empty/dynamic_pose/info");
     pose_topic_ = declare_parameter<std::string>("pose_topic", "/ground_truth_pose");
     path_topic_ = declare_parameter<std::string>("path_topic", "/ground_truth_path");
-    output_frame_id_ = declare_parameter<std::string>("output_frame_id", "odom");
+    output_frame_id_ = declare_parameter<std::string>("output_frame_id", "map");
     max_path_length_ = declare_parameter<int>("max_path_length", 2000);
 
     pose_sub_ = create_subscription<tf2_msgs::msg::TFMessage>(
@@ -49,9 +49,7 @@ private:
 
       geometry_msgs::msg::PoseStamped pose_msg;
       pose_msg.header = transform.header;
-      if (pose_msg.header.frame_id.empty()) {
-        pose_msg.header.frame_id = output_frame_id_;
-      }
+      pose_msg.header.frame_id = output_frame_id_;
       pose_msg.pose.position.x = transform.transform.translation.x;
       pose_msg.pose.position.y = transform.transform.translation.y;
       pose_msg.pose.position.z = transform.transform.translation.z;
@@ -59,9 +57,7 @@ private:
 
       pose_pub_->publish(pose_msg);
 
-      if (path_msg_.header.frame_id.empty()) {
-        path_msg_.header.frame_id = pose_msg.header.frame_id;
-      }
+      path_msg_.header.frame_id = output_frame_id_;
       path_msg_.header.stamp = pose_msg.header.stamp;
       path_msg_.poses.push_back(pose_msg);
 

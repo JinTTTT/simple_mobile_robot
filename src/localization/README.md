@@ -26,7 +26,7 @@ This package implements two localization algorithms:
 The particle filter is a global localization approach. It will be better if the initial pose is unknown or the robot gets lost.
 It can start with particles spread across the free space of the map.
 
-The Kalman filter is a local pose tracker. It will be better if the initial pose is close to the actual pose and the robot does not get lost.The localization will be more smooth than the particle filter, but it can lose track if the odometry error grows too large or if the scan matcher fails to find a good local match.
+The Kalman filter is a local pose tracker. It will be better if the initial pose is close to the actual pose and the robot does not get lost. The localization will be smoother than the particle filter, but it can lose track if the odometry error grows too large or if the scan matcher fails to find a good local match.
 It assumes the robot starts near the known initial pose `x=0`, `y=0`, `theta=0`.
 
 ## Particle Filter Localization
@@ -79,7 +79,7 @@ Disadvantages:
 - can be slower than a Kalman filter
 - can lose accuracy if the likelihood model is too simple
 - may converge to a wrong pose in symmetric environments
-- parameters are currently hard-coded instead of exposed as ROS parameters
+- depends on tuning values such as particle count, scan beam step, and resampling noise
 
 ### Important Methods
 
@@ -110,8 +110,13 @@ map_to_odom = map_to_base_link * inverse(odom_to_base_link)
 
 ### Parameters
 
-The particle-filter node does not declare ROS parameters yet.
-The important values are hard-coded in the source:
+Particle-filter tuning lives in:
+
+```text
+src/localization/config/localization.yaml
+```
+
+Main parameters:
 
 - particle count: `500`
 - random seed: `42`
@@ -121,15 +126,21 @@ The important values are hard-coded in the source:
 - resampling position noise: `0.02 m`
 - resampling heading noise: `0.03 rad`
 
-Potential future ROS parameters:
+The parameter names are:
 
 - `num_particles`
+- `random_seed`
+- `likelihood_max_distance`
 - `scan_beam_step`
-- `max_likelihood_distance`
-- `translation_noise`
-- `rotation_noise`
-- `resample_xy_noise`
-- `resample_theta_noise`
+- `motion_update_min_translation`
+- `motion_update_min_rotation`
+- `translation_noise_from_translation`
+- `translation_noise_base`
+- `rotation_noise_from_rotation`
+- `rotation_noise_from_translation`
+- `rotation_noise_base`
+- `resample_xy_noise_std`
+- `resample_theta_noise_std`
 
 ### Run and Visualize
 
@@ -183,6 +194,12 @@ Start particle-filter localization:
 
 ```bash
 ros2 run localization particle_filter_localization_node
+```
+
+or with the package config:
+
+```bash
+ros2 launch localization particle_filter_localization.launch.py
 ```
 
 In RViz:
@@ -240,7 +257,7 @@ Disadvantages:
 - can fail in ambiguous or highly nonlinear cases
 - is only a local tracker, not a global relocalizer
 - can lose the actual pose if odometry error grows outside the scan matcher search window
-- parameters are currently hard-coded instead of exposed as ROS parameters
+- depends on a reasonable initial pose and scan-matching gate tuning
 
 ### Important Methods
 
@@ -261,8 +278,13 @@ The best valid candidate is published on `/scan_matched_pose`.
 
 ### Parameters
 
-The Kalman-filter node does not declare ROS parameters yet.
-The important values are hard-coded in the source:
+Kalman-filter and scan-matcher tuning lives in:
+
+```text
+src/localization/config/localization.yaml
+```
+
+Main parameters:
 
 - initial pose: `x=0`, `y=0`, `theta=0`
 - initial standard deviations: `0.02`, `0.02`, `0.02`
@@ -279,17 +301,15 @@ The important values are hard-coded in the source:
 - maximum correction rotation: `0.25 rad`
 - scan match measurement standard deviations: `0.08`, `0.08`, `0.08`
 
-Potential future ROS parameters:
+The parameter groups are:
 
-- `initial_pose`
-- `initial_covariance`
-- `process_noise`
-- `scan_match_search_range`
-- `scan_match_search_step`
-- `scan_match_min_score`
-- `max_correction_translation`
-- `max_correction_rotation`
-- `scan_match_measurement_noise`
+- initial pose: `initial_x`, `initial_y`, `initial_theta`
+- initial covariance: `initial_std_x`, `initial_std_y`, `initial_std_theta`
+- process noise: `base_process_std_x`, `base_process_std_y`, `base_process_std_theta`, `distance_noise_scale`, `rotation_noise_scale`
+- odometry update thresholds: `min_translation_delta`, `min_rotation_delta`
+- scan matching: `search_xy_range`, `search_theta_range`, `search_xy_step`, `search_theta_step`, `scan_match_beam_step`, `likelihood_max_distance`
+- scan-match correction gate: `min_scan_match_score`, `max_correction_translation`, `max_correction_rotation`
+- scan-match measurement noise: `scan_match_std_x`, `scan_match_std_y`, `scan_match_std_theta`
 
 ### Run and Visualize
 
@@ -298,6 +318,12 @@ Then start Kalman-filter localization:
 
 ```bash
 ros2 run localization kalman_localization_node
+```
+
+or with the package config:
+
+```bash
+ros2 launch localization kalman_localization.launch.py
 ```
 
 In RViz:
@@ -317,8 +343,6 @@ The `/scan_matched_pose` topic shows the best local scan-matching pose before ga
 Current issues:
 
 - both localization nodes publish `/estimated_pose` and `map -> odom`, so they cannot run together
-- particle-filter tuning values are hard-coded
-- Kalman-filter and scan-matcher tuning values are hard-coded
 - the particle filter uses a simple likelihood field sensor model
 - the particle filter estimate is a simple average and does not publish covariance
 - the Kalman filter assumes the initial pose is already close to the real pose
@@ -328,8 +352,6 @@ Current issues:
 
 Potential improvements:
 
-- add ROS parameters for particle filter, Kalman filter, and scan matcher tuning
-- add launch files for particle-filter and Kalman-filter localization
 - publish covariance for the particle-filter estimate
 - improve scan scoring with a stronger probabilistic sensor model
 - add confidence output for both localization algorithms

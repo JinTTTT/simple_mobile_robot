@@ -99,12 +99,11 @@ Main files:
 - `models/simple_room/model.sdf`: room model used by the world and map generator
 
 The `bringup_simulation.launch.py` file includes `spawn_robot.launch.py`.
-It then starts `ros_gz_bridge` with bridges for `/cmd_vel`, `/odom`, `/tf`, and `/scan`.
+It then starts `ros_gz_bridge` with bridges for `/cmd_vel`, `/odom`, `/tf`, `/scan`, and the Gazebo dynamic pose stream used for ground truth.
 
 ## Parameters
 
-This package does not declare ROS parameters yet.
-The important values are configured in launch, URDF, SDF, and bridge files:
+Most values are configured in launch, URDF, SDF, and bridge files:
 
 - robot spawn pose: `x=0.0`, `y=0.0`, `z=0.5`
 - robot name in Gazebo: `my_first_robot`
@@ -113,6 +112,15 @@ The important values are configured in launch, URDF, SDF, and bridge files:
 - lidar topic: `/scan`
 - TF topic: `/tf`
 - world file: `worlds/my_world.sdf`
+
+The ground-truth pose publisher also declares these ROS parameters:
+
+- `candidate_child_frames`: robot frame names to accept from the Gazebo pose stream
+- `input_topic`: Gazebo dynamic pose stream, default `/world/empty/dynamic_pose/info`
+- `pose_topic`: ground-truth pose output, default `/ground_truth_pose`
+- `path_topic`: ground-truth path output, default `/ground_truth_path`
+- `output_frame_id`: output frame for truth pose/path, default `map`
+- `max_path_length`: maximum stored path poses, default `2000`
 
 Potential future ROS parameters or launch arguments:
 

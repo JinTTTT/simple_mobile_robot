@@ -6,6 +6,7 @@
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <tf2/LinearMath/Quaternion.h>
@@ -14,6 +15,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
+#include "localization/geometry_utils.hpp"
 #include "localization/kalman_filter.hpp"
 #include "localization/scan_matcher.hpp"
 
@@ -23,23 +25,22 @@ public:
     KalmanLocalizationNode();
 
 private:
-    void map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
-    void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg);
-    void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
+    void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
+    void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+    void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
 
-    void publish_estimated_pose();
-    void publish_estimated_pose_with_covariance();
-    void publish_scan_matched_pose(const ScanMatchResult & match);
-    void publish_map_to_odom_tf(
+    KalmanFilterParameters loadKalmanFilterParameters();
+    ScanMatcherParameters loadScanMatcherParameters();
+    void publishEstimatedPose();
+    void publishEstimatedPoseWithCovariance();
+    void publishScanMatchedPose(const ScanMatchResult & match);
+    void publishMapToOdomTf(
         double odom_x, double odom_y, double odom_theta,
         const rclcpp::Time & stamp);
-    bool should_use_scan_match_correction(
+    bool shouldUseScanMatchCorrection(
         const ScanMatchResult & match,
         const KalmanPose & prediction) const;
-    KalmanFilter::Matrix3x3 scan_match_measurement_covariance() const;
-    double normalize_angle(double angle) const;
-    double square(double value) const;
-    geometry_msgs::msg::Quaternion yaw_to_quaternion(double yaw) const;
+    KalmanFilter::Matrix3x3 scanMatchMeasurementCovariance() const;
 
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
@@ -64,12 +65,29 @@ private:
     double scan_match_std_x_ = 0.08;
     double scan_match_std_y_ = 0.08;
     double scan_match_std_theta_ = 0.08;
+    double initial_x_ = 0.0;
+    double initial_y_ = 0.0;
+    double initial_theta_ = 0.0;
 };
 
 KalmanLocalizationNode::KalmanLocalizationNode()
 : Node("kalman_localization_node")
 {
-    kf_.initialize(0.0, 0.0, 0.0);
+    initial_x_ = this->declare_parameter<double>("initial_x", 0.0);
+    initial_y_ = this->declare_parameter<double>("initial_y", 0.0);
+    initial_theta_ = this->declare_parameter<double>("initial_theta", 0.0);
+    min_scan_match_score_ = this->declare_parameter<double>("min_scan_match_score", 0.40);
+    max_correction_translation_ =
+        this->declare_parameter<double>("max_correction_translation", 0.25);
+    max_correction_rotation_ =
+        this->declare_parameter<double>("max_correction_rotation", 0.25);
+    scan_match_std_x_ = this->declare_parameter<double>("scan_match_std_x", 0.08);
+    scan_match_std_y_ = this->declare_parameter<double>("scan_match_std_y", 0.08);
+    scan_match_std_theta_ = this->declare_parameter<double>("scan_match_std_theta", 0.08);
+
+    kf_ = KalmanFilter(loadKalmanFilterParameters());
+    kf_.initialize(initial_x_, initial_y_, initial_theta_);
+    scan_matcher_ = ScanMatcher(loadScanMatcherParameters());
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     rclcpp::QoS static_map_qos(1);
@@ -78,15 +96,15 @@ KalmanLocalizationNode::KalmanLocalizationNode()
 
     map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
         "/map", static_map_qos,
-        std::bind(&KalmanLocalizationNode::map_callback, this, std::placeholders::_1));
+        std::bind(&KalmanLocalizationNode::mapCallback, this, std::placeholders::_1));
 
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
         "/odom", 10,
-        std::bind(&KalmanLocalizationNode::odom_callback, this, std::placeholders::_1));
+        std::bind(&KalmanLocalizationNode::odomCallback, this, std::placeholders::_1));
 
     scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
         "/scan", 10,
-        std::bind(&KalmanLocalizationNode::scan_callback, this, std::placeholders::_1));
+        std::bind(&KalmanLocalizationNode::scanCallback, this, std::placeholders::_1));
 
     estimated_pose_pub_ =
         this->create_publisher<geometry_msgs::msg::PoseStamped>("/estimated_pose", 10);
@@ -98,10 +116,53 @@ KalmanLocalizationNode::KalmanLocalizationNode()
 
     RCLCPP_INFO(
         this->get_logger(),
-        "KalmanLocalizationNode started with initial pose x=0.0 y=0.0 theta=0.0.");
+        "KalmanLocalizationNode started with initial pose x=%.2f y=%.2f theta=%.2f.",
+        initial_x_,
+        initial_y_,
+        initial_theta_);
 }
 
-void KalmanLocalizationNode::map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+KalmanFilterParameters KalmanLocalizationNode::loadKalmanFilterParameters()
+{
+    KalmanFilterParameters parameters;
+    parameters.initial_std_x = this->declare_parameter<double>("initial_std_x", 0.02);
+    parameters.initial_std_y = this->declare_parameter<double>("initial_std_y", 0.02);
+    parameters.initial_std_theta = this->declare_parameter<double>("initial_std_theta", 0.02);
+    parameters.base_process_std_x =
+        this->declare_parameter<double>("base_process_std_x", 0.005);
+    parameters.base_process_std_y =
+        this->declare_parameter<double>("base_process_std_y", 0.005);
+    parameters.base_process_std_theta =
+        this->declare_parameter<double>("base_process_std_theta", 0.002);
+    parameters.distance_noise_scale =
+        this->declare_parameter<double>("distance_noise_scale", 0.10);
+    parameters.rotation_noise_scale =
+        this->declare_parameter<double>("rotation_noise_scale", 0.10);
+    parameters.min_translation_delta =
+        this->declare_parameter<double>("min_translation_delta", 0.0002);
+    parameters.min_rotation_delta =
+        this->declare_parameter<double>("min_rotation_delta", 0.0002);
+    return parameters;
+}
+
+ScanMatcherParameters KalmanLocalizationNode::loadScanMatcherParameters()
+{
+    ScanMatcherParameters parameters;
+    parameters.search_xy_range = this->declare_parameter<double>("search_xy_range", 0.20);
+    parameters.search_theta_range = this->declare_parameter<double>("search_theta_range", 0.20);
+    parameters.search_xy_step =
+        std::max(0.001, this->declare_parameter<double>("search_xy_step", 0.05));
+    parameters.search_theta_step =
+        std::max(0.001, this->declare_parameter<double>("search_theta_step", 0.05));
+    parameters.beam_step =
+        static_cast<std::size_t>(
+            std::max<long>(1, this->declare_parameter<int>("scan_match_beam_step", 10)));
+    parameters.likelihood_max_distance =
+        std::max(0.001, this->declare_parameter<double>("likelihood_max_distance", 1.0));
+    return parameters;
+}
+
+void KalmanLocalizationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
 {
     scan_matcher_.setMap(*msg);
     RCLCPP_INFO(
@@ -111,7 +172,7 @@ void KalmanLocalizationNode::map_callback(const nav_msgs::msg::OccupancyGrid::Sh
         msg->info.height);
 }
 
-void KalmanLocalizationNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
+void KalmanLocalizationNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
     double x = msg->pose.pose.position.x;
     double y = msg->pose.pose.position.y;
@@ -123,9 +184,9 @@ void KalmanLocalizationNode::odom_callback(const nav_msgs::msg::Odometry::Shared
         last_odom_theta_ = theta;
         odom_initialized_ = true;
 
-        publish_estimated_pose();
-        publish_estimated_pose_with_covariance();
-        publish_map_to_odom_tf(x, y, theta, msg->header.stamp);
+        publishEstimatedPose();
+        publishEstimatedPoseWithCovariance();
+        publishMapToOdomTf(x, y, theta, msg->header.stamp);
         return;
     }
 
@@ -135,12 +196,12 @@ void KalmanLocalizationNode::odom_callback(const nav_msgs::msg::Odometry::Shared
     last_odom_y_ = y;
     last_odom_theta_ = theta;
 
-    publish_estimated_pose();
-    publish_estimated_pose_with_covariance();
-    publish_map_to_odom_tf(x, y, theta, msg->header.stamp);
+    publishEstimatedPose();
+    publishEstimatedPoseWithCovariance();
+    publishMapToOdomTf(x, y, theta, msg->header.stamp);
 }
 
-void KalmanLocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
+void KalmanLocalizationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
 {
     if (!scan_matcher_.hasMap()) {
         return;
@@ -157,26 +218,26 @@ void KalmanLocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::Sh
         return;
     }
 
-    publish_scan_matched_pose(match);
+    publishScanMatchedPose(match);
 
-    if (should_use_scan_match_correction(match, estimate)) {
+    if (shouldUseScanMatchCorrection(match, estimate)) {
         kf_.correctWithPoseMeasurement(
             match.pose.x,
             match.pose.y,
             match.pose.theta,
-            scan_match_measurement_covariance());
+            scanMatchMeasurementCovariance());
 
-        publish_estimated_pose();
-        publish_estimated_pose_with_covariance();
+        publishEstimatedPose();
+        publishEstimatedPoseWithCovariance();
 
         if (odom_initialized_) {
-            publish_map_to_odom_tf(
+            publishMapToOdomTf(
                 last_odom_x_, last_odom_y_, last_odom_theta_, msg->header.stamp);
         }
     }
 }
 
-void KalmanLocalizationNode::publish_estimated_pose()
+void KalmanLocalizationNode::publishEstimatedPose()
 {
     KalmanPose estimate = kf_.estimatePose();
 
@@ -185,12 +246,12 @@ void KalmanLocalizationNode::publish_estimated_pose()
     msg.header.frame_id = "map";
     msg.pose.position.x = estimate.x;
     msg.pose.position.y = estimate.y;
-    msg.pose.orientation = yaw_to_quaternion(estimate.theta);
+    msg.pose.orientation = yawToQuaternion(estimate.theta);
 
     estimated_pose_pub_->publish(msg);
 }
 
-void KalmanLocalizationNode::publish_estimated_pose_with_covariance()
+void KalmanLocalizationNode::publishEstimatedPoseWithCovariance()
 {
     KalmanPose estimate = kf_.estimatePose();
     const auto & covariance = kf_.covariance();
@@ -200,7 +261,7 @@ void KalmanLocalizationNode::publish_estimated_pose_with_covariance()
     msg.header.frame_id = "map";
     msg.pose.pose.position.x = estimate.x;
     msg.pose.pose.position.y = estimate.y;
-    msg.pose.pose.orientation = yaw_to_quaternion(estimate.theta);
+    msg.pose.pose.orientation = yawToQuaternion(estimate.theta);
 
     msg.pose.covariance[0] = covariance[0];
     msg.pose.covariance[1] = covariance[1];
@@ -215,19 +276,19 @@ void KalmanLocalizationNode::publish_estimated_pose_with_covariance()
     estimated_pose_with_covariance_pub_->publish(msg);
 }
 
-void KalmanLocalizationNode::publish_scan_matched_pose(const ScanMatchResult & match)
+void KalmanLocalizationNode::publishScanMatchedPose(const ScanMatchResult & match)
 {
     geometry_msgs::msg::PoseStamped msg;
     msg.header.stamp = this->now();
     msg.header.frame_id = "map";
     msg.pose.position.x = match.pose.x;
     msg.pose.position.y = match.pose.y;
-    msg.pose.orientation = yaw_to_quaternion(match.pose.theta);
+    msg.pose.orientation = yawToQuaternion(match.pose.theta);
 
     scan_matched_pose_pub_->publish(msg);
 }
 
-void KalmanLocalizationNode::publish_map_to_odom_tf(
+void KalmanLocalizationNode::publishMapToOdomTf(
     double odom_x, double odom_y, double odom_theta,
     const rclcpp::Time & stamp)
 {
@@ -258,7 +319,7 @@ void KalmanLocalizationNode::publish_map_to_odom_tf(
     tf_broadcaster_->sendTransform(msg);
 }
 
-bool KalmanLocalizationNode::should_use_scan_match_correction(
+bool KalmanLocalizationNode::shouldUseScanMatchCorrection(
     const ScanMatchResult & match,
     const KalmanPose & prediction) const
 {
@@ -269,48 +330,19 @@ bool KalmanLocalizationNode::should_use_scan_match_correction(
     double dx = match.pose.x - prediction.x;
     double dy = match.pose.y - prediction.y;
     double translation_error = std::sqrt(dx * dx + dy * dy);
-    double rotation_error = std::abs(normalize_angle(match.pose.theta - prediction.theta));
+    double rotation_error = std::abs(normalizeAngle(match.pose.theta - prediction.theta));
 
     return translation_error <= max_correction_translation_ &&
         rotation_error <= max_correction_rotation_;
 }
 
-KalmanFilter::Matrix3x3 KalmanLocalizationNode::scan_match_measurement_covariance() const
+KalmanFilter::Matrix3x3 KalmanLocalizationNode::scanMatchMeasurementCovariance() const
 {
     return {
         square(scan_match_std_x_), 0.0, 0.0,
         0.0, square(scan_match_std_y_), 0.0,
         0.0, 0.0, square(scan_match_std_theta_)
     };
-}
-
-double KalmanLocalizationNode::normalize_angle(double angle) const
-{
-    while (angle > M_PI) {
-        angle -= 2.0 * M_PI;
-    }
-    while (angle < -M_PI) {
-        angle += 2.0 * M_PI;
-    }
-    return angle;
-}
-
-double KalmanLocalizationNode::square(double value) const
-{
-    return value * value;
-}
-
-geometry_msgs::msg::Quaternion KalmanLocalizationNode::yaw_to_quaternion(double yaw) const
-{
-    tf2::Quaternion quaternion;
-    quaternion.setRPY(0.0, 0.0, yaw);
-
-    geometry_msgs::msg::Quaternion msg;
-    msg.x = quaternion.x();
-    msg.y = quaternion.y();
-    msg.z = quaternion.z();
-    msg.w = quaternion.w();
-    return msg;
 }
 
 int main(int argc, char ** argv)

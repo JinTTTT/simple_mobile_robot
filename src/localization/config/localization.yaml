@@ -1,0 +1,43 @@
+particle_filter_localization_node:
+  ros__parameters:
+    num_particles: 500
+    random_seed: 42
+    likelihood_max_distance: 1.0
+    scan_beam_step: 10
+    motion_update_min_translation: 0.001
+    motion_update_min_rotation: 0.001
+    translation_noise_from_translation: 0.02
+    translation_noise_base: 0.005
+    rotation_noise_from_rotation: 0.05
+    rotation_noise_from_translation: 0.01
+    rotation_noise_base: 0.002
+    resample_xy_noise_std: 0.02
+    resample_theta_noise_std: 0.03
+
+kalman_localization_node:
+  ros__parameters:
+    initial_x: 0.0
+    initial_y: 0.0
+    initial_theta: 0.0
+    initial_std_x: 0.02
+    initial_std_y: 0.02
+    initial_std_theta: 0.02
+    base_process_std_x: 0.005
+    base_process_std_y: 0.005
+    base_process_std_theta: 0.002
+    distance_noise_scale: 0.10
+    rotation_noise_scale: 0.10
+    min_translation_delta: 0.0002
+    min_rotation_delta: 0.0002
+    search_xy_range: 0.20
+    search_theta_range: 0.20
+    search_xy_step: 0.05
+    search_theta_step: 0.05
+    scan_match_beam_step: 10
+    likelihood_max_distance: 1.0
+    min_scan_match_score: 0.40
+    max_correction_translation: 0.25
+    max_correction_rotation: 0.25
+    scan_match_std_x: 0.08
+    scan_match_std_y: 0.08
+    scan_match_std_theta: 0.08

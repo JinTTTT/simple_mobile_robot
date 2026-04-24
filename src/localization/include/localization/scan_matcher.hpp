@@ -1,5 +1,7 @@
 #pragma once
 
+#include "localization/likelihood_field.hpp"
+
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 
@@ -40,14 +42,10 @@ public:
     const nav_msgs::msg::OccupancyGrid & likelihoodFieldMap() const;
 
 private:
-    void buildLikelihoodField(const nav_msgs::msg::OccupancyGrid & map);
     double scoreScanAtPose(
         const sensor_msgs::msg::LaserScan & scan,
         const ScanMatchPose & pose) const;
-    bool worldToLikelihoodMap(double x, double y, int & col, int & row) const;
-    double likelihoodAtWorld(double x, double y) const;
-    double normalizeAngle(double angle) const;
 
     ScanMatcherParameters parameters_;
-    nav_msgs::msg::OccupancyGrid likelihood_field_map_;
+    LikelihoodField likelihood_field_;
 };

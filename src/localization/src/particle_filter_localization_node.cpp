@@ -14,6 +14,10 @@
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include <algorithm>
+#include <cmath>
+
+#include "localization/geometry_utils.hpp"
 #include "localization/particle_filter.hpp"
 
 class ParticleFilterLocalizationNode : public rclcpp::Node
@@ -22,13 +26,14 @@ public:
     ParticleFilterLocalizationNode();
 
 private:
-    void map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
-    void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg);
-    void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
+    void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
+    void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+    void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
 
-    void publish_particles();
-    void publish_estimated_pose();
-    void publish_map_to_odom_tf();
+    ParticleFilterParameters loadParticleFilterParameters();
+    void publishParticles();
+    void publishEstimatedPose();
+    void publishMapToOdomTf();
 
     // Subscriptions
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
@@ -54,13 +59,21 @@ private:
     double last_odom_theta_ = 0.0;
     bool   odom_initialized_ = false;
     bool   particles_moved_since_last_resample_ = false;
+    double motion_update_min_translation_ = 0.001;
+    double motion_update_min_rotation_ = 0.001;
 
     ParticleFilter pf_;
 };
 
 ParticleFilterLocalizationNode::ParticleFilterLocalizationNode()
-: Node("particle_filter_localization_node"), pf_(500)   // 500 particles
+: Node("particle_filter_localization_node")
 {
+    pf_.configure(loadParticleFilterParameters());
+    motion_update_min_translation_ =
+        this->declare_parameter<double>("motion_update_min_translation", 0.001);
+    motion_update_min_rotation_ =
+        this->declare_parameter<double>("motion_update_min_rotation", 0.001);
+
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
@@ -71,15 +84,15 @@ ParticleFilterLocalizationNode::ParticleFilterLocalizationNode()
 
     map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
         "/map", static_map_qos,
-        std::bind(&ParticleFilterLocalizationNode::map_callback, this, std::placeholders::_1));
+        std::bind(&ParticleFilterLocalizationNode::mapCallback, this, std::placeholders::_1));
 
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
         "/odom", 10,
-        std::bind(&ParticleFilterLocalizationNode::odom_callback, this, std::placeholders::_1));
+        std::bind(&ParticleFilterLocalizationNode::odomCallback, this, std::placeholders::_1));
 
     scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
         "/scan", 10,
-        std::bind(&ParticleFilterLocalizationNode::scan_callback, this, std::placeholders::_1));
+        std::bind(&ParticleFilterLocalizationNode::scanCallback, this, std::placeholders::_1));
 
     particle_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("/particlecloud", 10);
     estimated_pose_pub_ =
@@ -91,19 +104,48 @@ ParticleFilterLocalizationNode::ParticleFilterLocalizationNode()
     RCLCPP_INFO(this->get_logger(), "ParticleFilterLocalizationNode started.");
 }
 
-void ParticleFilterLocalizationNode::map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+ParticleFilterParameters ParticleFilterLocalizationNode::loadParticleFilterParameters()
+{
+    ParticleFilterParameters parameters;
+    parameters.num_particles =
+        static_cast<int>(std::max<long>(1, this->declare_parameter<int>("num_particles", 500)));
+    parameters.random_seed =
+        static_cast<unsigned int>(this->declare_parameter<int>("random_seed", 42));
+    parameters.likelihood_max_distance =
+        std::max(0.001, this->declare_parameter<double>("likelihood_max_distance", 1.0));
+    parameters.scan_beam_step =
+        static_cast<std::size_t>(
+            std::max<long>(1, this->declare_parameter<int>("scan_beam_step", 10)));
+    parameters.translation_noise_from_translation =
+        this->declare_parameter<double>("translation_noise_from_translation", 0.02);
+    parameters.translation_noise_base =
+        this->declare_parameter<double>("translation_noise_base", 0.005);
+    parameters.rotation_noise_from_rotation =
+        this->declare_parameter<double>("rotation_noise_from_rotation", 0.05);
+    parameters.rotation_noise_from_translation =
+        this->declare_parameter<double>("rotation_noise_from_translation", 0.01);
+    parameters.rotation_noise_base =
+        this->declare_parameter<double>("rotation_noise_base", 0.002);
+    parameters.resample_xy_noise_std =
+        this->declare_parameter<double>("resample_xy_noise_std", 0.02);
+    parameters.resample_theta_noise_std =
+        this->declare_parameter<double>("resample_theta_noise_std", 0.03);
+    return parameters;
+}
+
+void ParticleFilterLocalizationNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
 {
     map_ = *msg;
     map_received_ = true;
     pf_.buildLikelihoodField(map_);
-    pf_.initUniform(map_);
-    likelihood_field_pub_->publish(pf_.getLikelihoodFieldMap());
+    pf_.initializeUniform(map_);
+    likelihood_field_pub_->publish(pf_.likelihoodFieldMap());
     RCLCPP_INFO(this->get_logger(),
         "Map received: %d x %d cells. Likelihood field built. Particles initialised.",
         msg->info.width, msg->info.height);
 }
 
-void ParticleFilterLocalizationNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
+void ParticleFilterLocalizationNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
     if (!map_received_) return;  // wait for map before moving particles
 
@@ -122,8 +164,12 @@ void ParticleFilterLocalizationNode::odom_callback(const nav_msgs::msg::Odometry
     // Only update if the robot actually moved (avoids jitter when still)
     double dx = x - last_odom_x_;
     double dy = y - last_odom_y_;
-    double dtheta = theta - last_odom_theta_;
-    if (std::abs(dx) < 0.001 && std::abs(dy) < 0.001 && std::abs(dtheta) < 0.001) return;
+    double dtheta = normalizeAngle(theta - last_odom_theta_);
+    double translation = std::sqrt(dx * dx + dy * dy);
+    if (translation < motion_update_min_translation_ &&
+        std::abs(dtheta) < motion_update_min_rotation_) {
+        return;
+    }
 
     pf_.sampleMotionModel(last_odom_x_, last_odom_y_, last_odom_theta_, x, y, theta);
     particles_moved_since_last_resample_ = true;
@@ -132,12 +178,12 @@ void ParticleFilterLocalizationNode::odom_callback(const nav_msgs::msg::Odometry
     last_odom_y_     = y;
     last_odom_theta_ = theta;
 
-    publish_particles();
-    publish_estimated_pose();
-    publish_map_to_odom_tf();
+    publishParticles();
+    publishEstimatedPose();
+    publishMapToOdomTf();
 }
 
-void ParticleFilterLocalizationNode::scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
+void ParticleFilterLocalizationNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
 {
     if (!map_received_) return;
 
@@ -146,31 +192,29 @@ void ParticleFilterLocalizationNode::scan_callback(const sensor_msgs::msg::Laser
         pf_.resample();
         particles_moved_since_last_resample_ = false;
     }
-    publish_particles();
-    publish_estimated_pose();
-    publish_map_to_odom_tf();
+    publishParticles();
+    publishEstimatedPose();
+    publishMapToOdomTf();
 }
 
-void ParticleFilterLocalizationNode::publish_particles()
+void ParticleFilterLocalizationNode::publishParticles()
 {
     geometry_msgs::msg::PoseArray msg;
     msg.header.stamp    = this->now();
     msg.header.frame_id = "map";
 
-    for (const auto & p : pf_.getParticles()) {
+    for (const auto & p : pf_.particles()) {
         geometry_msgs::msg::Pose pose;
         pose.position.x = p.x;
         pose.position.y = p.y;
-        // Convert yaw angle back to quaternion
-        pose.orientation.z = std::sin(p.theta / 2.0);
-        pose.orientation.w = std::cos(p.theta / 2.0);
+        pose.orientation = yawToQuaternion(p.theta);
         msg.poses.push_back(pose);
     }
 
     particle_pub_->publish(msg);
 }
 
-void ParticleFilterLocalizationNode::publish_estimated_pose()
+void ParticleFilterLocalizationNode::publishEstimatedPose()
 {
     EstimatedPose estimate = pf_.estimatePose();
 
@@ -179,13 +223,12 @@ void ParticleFilterLocalizationNode::publish_estimated_pose()
     msg.header.frame_id = "map";
     msg.pose.position.x = estimate.x;
     msg.pose.position.y = estimate.y;
-    msg.pose.orientation.z = std::sin(estimate.theta / 2.0);
-    msg.pose.orientation.w = std::cos(estimate.theta / 2.0);
+    msg.pose.orientation = yawToQuaternion(estimate.theta);
 
     estimated_pose_pub_->publish(msg);
 }
 
-void ParticleFilterLocalizationNode::publish_map_to_odom_tf()
+void ParticleFilterLocalizationNode::publishMapToOdomTf()
 {
     EstimatedPose estimate = pf_.estimatePose();
 
