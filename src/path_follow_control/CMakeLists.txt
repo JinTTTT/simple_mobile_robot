@@ -17,8 +17,24 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+add_library(path_follow_control_core
+  src/path_follow_controller.cpp
+)
+
+target_include_directories(path_follow_control_core PUBLIC
+  include
+)
+
 add_executable(path_follow_control_node
   src/path_follow_control_node.cpp
+)
+
+target_include_directories(path_follow_control_node PUBLIC
+  include
+)
+
+target_link_libraries(path_follow_control_node
+  path_follow_control_core
 )
 
 ament_target_dependencies(path_follow_control_node
@@ -28,6 +44,7 @@ ament_target_dependencies(path_follow_control_node
 )
 
 install(TARGETS
+  path_follow_control_core
   path_follow_control_node
   DESTINATION lib/${PROJECT_NAME}
 )
