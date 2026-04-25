@@ -14,6 +14,56 @@ namespace slam
 
 SimpleSlam::SimpleSlam()
 {
+  configure(SimpleSlamConfig());
+}
+
+void SimpleSlam::configure(const SimpleSlamConfig & config)
+{
+  config_ = config;
+
+  resolution_ = config_.resolution;
+  width_ = config_.width;
+  height_ = config_.height;
+  origin_x_ = config_.origin_x;
+  origin_y_ = config_.origin_y;
+
+  log_odds_hit_ = config_.log_odds_hit;
+  log_odds_free_ = config_.log_odds_free;
+  log_odds_min_ = config_.log_odds_min;
+  log_odds_max_ = config_.log_odds_max;
+
+  min_occupied_cells_for_matching_ = config_.min_occupied_cells_for_matching;
+  likelihood_max_distance_ = config_.likelihood_max_distance;
+
+  scan_match_xy_range_ = config_.scan_match_xy_range;
+  scan_match_xy_step_ = config_.scan_match_xy_step;
+  scan_match_theta_range_ = config_.scan_match_theta_range;
+  scan_match_theta_step_ = config_.scan_match_theta_step;
+  scan_match_beam_step_ = config_.scan_match_beam_step;
+  min_scan_match_score_ = config_.min_scan_match_score;
+  min_scan_match_score_improvement_ = config_.min_scan_match_score_improvement;
+  max_scan_match_translation_correction_ = config_.max_scan_match_translation_correction;
+  max_scan_match_rotation_correction_ = config_.max_scan_match_rotation_correction;
+  min_scan_match_translation_interval_ = config_.min_scan_match_translation_interval;
+  min_scan_match_rotation_interval_ = config_.min_scan_match_rotation_interval;
+  min_scan_match_scan_gap_ = config_.min_scan_match_scan_gap;
+  min_update_translation_ = config_.min_update_translation;
+  min_update_rotation_ = config_.min_update_rotation;
+
+  keyframe_min_translation_ = config_.keyframe_min_translation;
+  keyframe_min_rotation_ = config_.keyframe_min_rotation;
+  scan_signature_beam_step_ = config_.scan_signature_beam_step;
+  min_loop_closure_keyframe_age_ = config_.min_loop_closure_keyframe_age;
+  loop_closure_search_radius_ = config_.loop_closure_search_radius;
+  loop_closure_max_heading_diff_ = config_.loop_closure_max_heading_diff;
+  loop_closure_max_signature_diff_ = config_.loop_closure_max_signature_diff;
+  min_loop_closure_scan_gap_ = config_.min_loop_closure_scan_gap;
+  min_correction_scan_gap_ = config_.min_correction_scan_gap;
+  min_correction_keyframe_gap_ = config_.min_correction_keyframe_gap;
+  min_old_keyframe_separation_for_correction_ =
+    config_.min_old_keyframe_separation_for_correction;
+  loop_closure_correction_strength_ = config_.loop_closure_correction_strength;
+
   initializeMap();
 }
 
@@ -84,9 +134,6 @@ SlamUpdateResult SimpleSlam::handleScan(
 
 void SimpleSlam::initializeMap()
 {
-  origin_x_ = -width_ * resolution_ / 2.0;
-  origin_y_ = -height_ * resolution_ / 2.0;
-
   map_log_odds_.assign(width_ * height_, 0.0);
   corrected_map_log_odds_.assign(width_ * height_, 0.0);
 
@@ -139,7 +186,7 @@ ScanMatchResult SimpleSlam::matchScan(
     return result;
   }
 
-  if (scans_integrated_ - last_scan_match_scan_ < min_scan_match_scan_gap_) {
+  if (scans_integrated_ - last_scan_match_scan_index_ < min_scan_match_scan_gap_) {
     return result;
   }
 
@@ -168,11 +215,15 @@ ScanMatchResult SimpleSlam::matchScan(
   double best_score = -std::numeric_limits<double>::infinity();
   Pose2D best_pose = predicted;
 
-  for (double dx = -search_xy_range_; dx <= search_xy_range_ + 1e-9; dx += search_xy_step_) {
-    for (double dy = -search_xy_range_; dy <= search_xy_range_ + 1e-9; dy += search_xy_step_) {
-      for (double dtheta = -search_theta_range_;
-        dtheta <= search_theta_range_ + 1e-9;
-        dtheta += search_theta_step_)
+  for (double dx = -scan_match_xy_range_; dx <= scan_match_xy_range_ + 1e-9;
+    dx += scan_match_xy_step_)
+  {
+    for (double dy = -scan_match_xy_range_; dy <= scan_match_xy_range_ + 1e-9;
+      dy += scan_match_xy_step_)
+    {
+      for (double dtheta = -scan_match_theta_range_;
+        dtheta <= scan_match_theta_range_ + 1e-9;
+        dtheta += scan_match_theta_step_)
       {
         Pose2D candidate;
         candidate.x = predicted.x + dx;
@@ -203,7 +254,7 @@ ScanMatchResult SimpleSlam::matchScan(
     result.pose = best_pose;
     result.used_scan_matching = true;
     scan_match_used_count_++;
-    last_scan_match_scan_ = scans_integrated_;
+    last_scan_match_scan_index_ = scans_integrated_;
     last_scan_match_pose_ = result.pose;
     scan_match_pose_initialized_ = true;
   }
@@ -488,18 +539,20 @@ LoopClosureResult SimpleSlam::detectLoopClosure()
     return {};
   }
 
-  if (scans_integrated_ - last_loop_closure_scan_ < min_loop_closure_scan_gap_) {
+  if (scans_integrated_ - last_loop_closure_scan_index_ < min_loop_closure_scan_gap_) {
     return {};
   }
 
-  std::size_t current_index = keyframes_.size() - 1;
-  const KeyFrame & current_keyframe = keyframes_[current_index];
-  double best_difference = std::numeric_limits<double>::max();
-  std::size_t best_index = 0;
+  std::size_t current_keyframe_index = keyframes_.size() - 1;
+  const KeyFrame & current_keyframe = keyframes_[current_keyframe_index];
+  double best_signature_difference = std::numeric_limits<double>::max();
+  std::size_t best_candidate_index = 0;
   bool found_candidate = false;
 
-  for (std::size_t i = 0; i < current_index; ++i) {
-    const KeyFrame & keyframe = keyframes_[i];
+  for (std::size_t candidate_index = 0; candidate_index < current_keyframe_index;
+    ++candidate_index)
+  {
+    const KeyFrame & keyframe = keyframes_[candidate_index];
     int keyframe_age = current_keyframe.scan_index - keyframe.scan_index;
     if (keyframe_age < min_loop_closure_keyframe_age_) {
       continue;
@@ -518,31 +571,31 @@ LoopClosureResult SimpleSlam::detectLoopClosure()
 
     double signature_difference =
       scanSignatureDifference(current_keyframe.scan_signature, keyframe.scan_signature);
-    if (signature_difference < best_difference) {
-      best_difference = signature_difference;
-      best_index = i;
+    if (signature_difference < best_signature_difference) {
+      best_signature_difference = signature_difference;
+      best_candidate_index = candidate_index;
       found_candidate = true;
     }
   }
 
-  if (!found_candidate || best_difference > loop_closure_max_signature_diff_) {
+  if (!found_candidate || best_signature_difference > loop_closure_max_signature_diff_) {
     return {};
   }
 
   loop_closure_count_++;
-  last_loop_closure_scan_ = scans_integrated_;
-  const KeyFrame & matched_keyframe = keyframes_[best_index];
+  last_loop_closure_scan_index_ = scans_integrated_;
+  const KeyFrame & matched_keyframe = keyframes_[best_candidate_index];
 
   LoopClosureResult result;
   result.detected = true;
   result.matched_pose = matched_keyframe.pose;
-  result.current_keyframe_index = current_index;
-  result.matched_keyframe_index = best_index;
+  result.current_keyframe_index = current_keyframe_index;
+  result.matched_keyframe_index = best_candidate_index;
   result.matched_scan_index = matched_keyframe.scan_index;
-  result.signature_difference = best_difference;
+  result.signature_difference = best_signature_difference;
 
-  if (shouldApplyLoopClosureCorrection(best_index, current_index)) {
-    applyLoopClosureCorrection(best_index, current_index);
+  if (shouldApplyLoopClosureCorrection(best_candidate_index, current_keyframe_index)) {
+    applyLoopClosureCorrection(best_candidate_index, current_keyframe_index);
     result.correction_applied = true;
   }
 
@@ -550,25 +603,25 @@ LoopClosureResult SimpleSlam::detectLoopClosure()
 }
 
 bool SimpleSlam::shouldApplyLoopClosureCorrection(
-  std::size_t old_index, std::size_t current_index) const
+  std::size_t matched_keyframe_index, std::size_t current_keyframe_index) const
 {
-  if (current_index <= old_index) {
+  if (current_keyframe_index <= matched_keyframe_index) {
     return false;
   }
 
-  if (current_index - old_index < min_correction_keyframe_gap_) {
+  if (current_keyframe_index - matched_keyframe_index < min_correction_keyframe_gap_) {
     return false;
   }
 
-  if (scans_integrated_ - last_correction_scan_ < min_correction_scan_gap_) {
+  if (scans_integrated_ - last_correction_scan_index_ < min_correction_scan_gap_) {
     return false;
   }
 
-  if (last_corrected_old_keyframe_ != std::numeric_limits<std::size_t>::max()) {
+  if (last_corrected_matched_keyframe_index_ != std::numeric_limits<std::size_t>::max()) {
     std::size_t separation =
-      old_index > last_corrected_old_keyframe_ ?
-      old_index - last_corrected_old_keyframe_ :
-      last_corrected_old_keyframe_ - old_index;
+      matched_keyframe_index > last_corrected_matched_keyframe_index_ ?
+      matched_keyframe_index - last_corrected_matched_keyframe_index_ :
+      last_corrected_matched_keyframe_index_ - matched_keyframe_index;
 
     if (separation < min_old_keyframe_separation_for_correction_) {
       return false;
@@ -579,32 +632,37 @@ bool SimpleSlam::shouldApplyLoopClosureCorrection(
 }
 
 void SimpleSlam::applyLoopClosureCorrection(
-  std::size_t old_index, std::size_t current_index)
+  std::size_t matched_keyframe_index, std::size_t current_keyframe_index)
 {
-  if (current_index <= old_index || current_index >= keyframes_.size()) {
+  if (current_keyframe_index <= matched_keyframe_index ||
+    current_keyframe_index >= keyframes_.size())
+  {
     return;
   }
 
-  const Pose2D old_pose = keyframes_[old_index].corrected_pose;
-  const Pose2D current_pose = keyframes_[current_index].corrected_pose;
+  const Pose2D matched_pose = keyframes_[matched_keyframe_index].corrected_pose;
+  const Pose2D current_pose = keyframes_[current_keyframe_index].corrected_pose;
 
-  double error_x = loop_closure_correction_strength_ * (old_pose.x - current_pose.x);
-  double error_y = loop_closure_correction_strength_ * (old_pose.y - current_pose.y);
+  double error_x = loop_closure_correction_strength_ * (matched_pose.x - current_pose.x);
+  double error_y = loop_closure_correction_strength_ * (matched_pose.y - current_pose.y);
   double error_theta =
-    loop_closure_correction_strength_ * normalizeAngle(old_pose.theta - current_pose.theta);
-  double span = static_cast<double>(current_index - old_index);
+    loop_closure_correction_strength_ * normalizeAngle(matched_pose.theta - current_pose.theta);
+  double span = static_cast<double>(current_keyframe_index - matched_keyframe_index);
 
-  for (std::size_t i = old_index + 1; i <= current_index; ++i) {
-    double fraction = static_cast<double>(i - old_index) / span;
-    keyframes_[i].corrected_pose.x += fraction * error_x;
-    keyframes_[i].corrected_pose.y += fraction * error_y;
-    keyframes_[i].corrected_pose.theta =
-      normalizeAngle(keyframes_[i].corrected_pose.theta + fraction * error_theta);
+  for (std::size_t keyframe_index = matched_keyframe_index + 1;
+    keyframe_index <= current_keyframe_index;
+    ++keyframe_index)
+  {
+    double fraction = static_cast<double>(keyframe_index - matched_keyframe_index) / span;
+    keyframes_[keyframe_index].corrected_pose.x += fraction * error_x;
+    keyframes_[keyframe_index].corrected_pose.y += fraction * error_y;
+    keyframes_[keyframe_index].corrected_pose.theta =
+      normalizeAngle(keyframes_[keyframe_index].corrected_pose.theta + fraction * error_theta);
   }
 
   loop_closure_correction_count_++;
-  last_correction_scan_ = scans_integrated_;
-  last_corrected_old_keyframe_ = old_index;
+  last_correction_scan_index_ = scans_integrated_;
+  last_corrected_matched_keyframe_index_ = matched_keyframe_index;
 }
 
 StoredScan SimpleSlam::makeStoredScan(const sensor_msgs::msg::LaserScan & scan) const

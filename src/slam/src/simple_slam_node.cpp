@@ -24,6 +24,7 @@ private:
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg);
 
+  slam::SimpleSlamConfig loadSlamConfig();
   void publishEstimatedPose(const builtin_interfaces::msg::Time & stamp);
   void publishScanMatchedPose(
     const slam::Pose2D & pose,
@@ -51,6 +52,8 @@ private:
 SimpleSlamNode::SimpleSlamNode()
 : Node("simple_slam_node")
 {
+  simple_slam_.configure(loadSlamConfig());
+
   odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
     "/odom", 10, std::bind(&SimpleSlamNode::odomCallback, this, std::placeholders::_1));
 
@@ -79,6 +82,87 @@ SimpleSlamNode::SimpleSlamNode()
     "Inputs: /odom, /scan. Outputs: /map, /corrected_map, /estimated_pose, "
     "/scan_matched_pose, /trajectory, /corrected_trajectory, /loop_closure_pose, "
     "TF map->odom.");
+}
+
+slam::SimpleSlamConfig SimpleSlamNode::loadSlamConfig()
+{
+  slam::SimpleSlamConfig config;
+
+  config.resolution = this->declare_parameter("resolution", config.resolution);
+  config.width = this->declare_parameter("width", config.width);
+  config.height = this->declare_parameter("height", config.height);
+  config.origin_x = this->declare_parameter("origin_x", config.origin_x);
+  config.origin_y = this->declare_parameter("origin_y", config.origin_y);
+
+  config.log_odds_hit = this->declare_parameter("log_odds_hit", config.log_odds_hit);
+  config.log_odds_free = this->declare_parameter("log_odds_free", config.log_odds_free);
+  config.log_odds_min = this->declare_parameter("log_odds_min", config.log_odds_min);
+  config.log_odds_max = this->declare_parameter("log_odds_max", config.log_odds_max);
+
+  config.min_occupied_cells_for_matching = this->declare_parameter(
+    "min_occupied_cells_for_matching", config.min_occupied_cells_for_matching);
+  config.likelihood_max_distance = this->declare_parameter(
+    "likelihood_max_distance", config.likelihood_max_distance);
+
+  config.scan_match_xy_range =
+    this->declare_parameter("scan_match_xy_range", config.scan_match_xy_range);
+  config.scan_match_xy_step =
+    this->declare_parameter("scan_match_xy_step", config.scan_match_xy_step);
+  config.scan_match_theta_range =
+    this->declare_parameter("scan_match_theta_range", config.scan_match_theta_range);
+  config.scan_match_theta_step =
+    this->declare_parameter("scan_match_theta_step", config.scan_match_theta_step);
+  config.scan_match_beam_step = static_cast<std::size_t>(
+    this->declare_parameter("scan_match_beam_step", static_cast<int>(config.scan_match_beam_step)));
+  config.min_scan_match_score =
+    this->declare_parameter("min_scan_match_score", config.min_scan_match_score);
+  config.min_scan_match_score_improvement = this->declare_parameter(
+    "min_scan_match_score_improvement", config.min_scan_match_score_improvement);
+  config.max_scan_match_translation_correction = this->declare_parameter(
+    "max_scan_match_translation_correction", config.max_scan_match_translation_correction);
+  config.max_scan_match_rotation_correction = this->declare_parameter(
+    "max_scan_match_rotation_correction", config.max_scan_match_rotation_correction);
+  config.min_scan_match_translation_interval = this->declare_parameter(
+    "min_scan_match_translation_interval", config.min_scan_match_translation_interval);
+  config.min_scan_match_rotation_interval = this->declare_parameter(
+    "min_scan_match_rotation_interval", config.min_scan_match_rotation_interval);
+  config.min_scan_match_scan_gap =
+    this->declare_parameter("min_scan_match_scan_gap", config.min_scan_match_scan_gap);
+  config.min_update_translation =
+    this->declare_parameter("min_update_translation", config.min_update_translation);
+  config.min_update_rotation =
+    this->declare_parameter("min_update_rotation", config.min_update_rotation);
+
+  config.keyframe_min_translation =
+    this->declare_parameter("keyframe_min_translation", config.keyframe_min_translation);
+  config.keyframe_min_rotation =
+    this->declare_parameter("keyframe_min_rotation", config.keyframe_min_rotation);
+  config.scan_signature_beam_step = static_cast<std::size_t>(
+    this->declare_parameter(
+      "scan_signature_beam_step", static_cast<int>(config.scan_signature_beam_step)));
+  config.min_loop_closure_keyframe_age = this->declare_parameter(
+    "min_loop_closure_keyframe_age", config.min_loop_closure_keyframe_age);
+  config.loop_closure_search_radius =
+    this->declare_parameter("loop_closure_search_radius", config.loop_closure_search_radius);
+  config.loop_closure_max_heading_diff = this->declare_parameter(
+    "loop_closure_max_heading_diff", config.loop_closure_max_heading_diff);
+  config.loop_closure_max_signature_diff = this->declare_parameter(
+    "loop_closure_max_signature_diff", config.loop_closure_max_signature_diff);
+  config.min_loop_closure_scan_gap =
+    this->declare_parameter("min_loop_closure_scan_gap", config.min_loop_closure_scan_gap);
+  config.min_correction_scan_gap =
+    this->declare_parameter("min_correction_scan_gap", config.min_correction_scan_gap);
+  config.min_correction_keyframe_gap = static_cast<std::size_t>(
+    this->declare_parameter(
+      "min_correction_keyframe_gap", static_cast<int>(config.min_correction_keyframe_gap)));
+  config.min_old_keyframe_separation_for_correction = static_cast<std::size_t>(
+    this->declare_parameter(
+      "min_old_keyframe_separation_for_correction",
+      static_cast<int>(config.min_old_keyframe_separation_for_correction)));
+  config.loop_closure_correction_strength = this->declare_parameter(
+    "loop_closure_correction_strength", config.loop_closure_correction_strength);
+
+  return config;
 }
 
 void SimpleSlamNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)

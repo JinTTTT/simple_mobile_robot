@@ -49,6 +49,51 @@ struct KeyFrame
   int scan_index = 0;
 };
 
+struct SimpleSlamConfig
+{
+  double resolution = 0.05;
+  int width = 500;
+  int height = 500;
+  double origin_x = -12.5;
+  double origin_y = -12.5;
+
+  double log_odds_hit = 2.89;
+  double log_odds_free = -2.25;
+  double log_odds_min = -10.0;
+  double log_odds_max = 10.0;
+
+  int min_occupied_cells_for_matching = 250;
+  double likelihood_max_distance = 1.0;
+
+  double scan_match_xy_range = 0.10;
+  double scan_match_xy_step = 0.05;
+  double scan_match_theta_range = 0.08;
+  double scan_match_theta_step = 0.04;
+  std::size_t scan_match_beam_step = 10;
+  double min_scan_match_score = 0.20;
+  double min_scan_match_score_improvement = 0.003;
+  double max_scan_match_translation_correction = 0.08;
+  double max_scan_match_rotation_correction = 0.08;
+  double min_scan_match_translation_interval = 0.02;
+  double min_scan_match_rotation_interval = 0.02;
+  int min_scan_match_scan_gap = 2;
+  double min_update_translation = 0.01;
+  double min_update_rotation = 0.01;
+
+  double keyframe_min_translation = 0.25;
+  double keyframe_min_rotation = 0.25;
+  std::size_t scan_signature_beam_step = 20;
+  int min_loop_closure_keyframe_age = 20;
+  double loop_closure_search_radius = 0.45;
+  double loop_closure_max_heading_diff = 0.70;
+  double loop_closure_max_signature_diff = 0.18;
+  int min_loop_closure_scan_gap = 20;
+  int min_correction_scan_gap = 80;
+  std::size_t min_correction_keyframe_gap = 12;
+  std::size_t min_old_keyframe_separation_for_correction = 8;
+  double loop_closure_correction_strength = 0.35;
+};
+
 struct LoopClosureResult
 {
   bool detected = false;
@@ -77,6 +122,8 @@ class SimpleSlam
 {
 public:
   SimpleSlam();
+
+  void configure(const SimpleSlamConfig & config);
 
   bool handleOdometry(const nav_msgs::msg::Odometry & msg);
   SlamUpdateResult handleScan(
@@ -122,9 +169,11 @@ private:
   void addKeyFrame(const sensor_msgs::msg::LaserScan & scan);
   LoopClosureResult detectLoopClosure();
   bool shouldApplyLoopClosureCorrection(
-    std::size_t old_index,
-    std::size_t current_index) const;
-  void applyLoopClosureCorrection(std::size_t old_index, std::size_t current_index);
+    std::size_t matched_keyframe_index,
+    std::size_t current_keyframe_index) const;
+  void applyLoopClosureCorrection(
+    std::size_t matched_keyframe_index,
+    std::size_t current_keyframe_index);
   StoredScan makeStoredScan(const sensor_msgs::msg::LaserScan & scan) const;
   std::vector<float> makeScanSignature(const sensor_msgs::msg::LaserScan & scan) const;
   double scanSignatureDifference(
@@ -178,10 +227,10 @@ private:
   bool likelihood_field_dirty_ = true;
   double likelihood_max_distance_ = 1.0;
 
-  double search_xy_range_ = 0.10;
-  double search_xy_step_ = 0.05;
-  double search_theta_range_ = 0.08;
-  double search_theta_step_ = 0.04;
+  double scan_match_xy_range_ = 0.10;
+  double scan_match_xy_step_ = 0.05;
+  double scan_match_theta_range_ = 0.08;
+  double scan_match_theta_step_ = 0.04;
   std::size_t scan_match_beam_step_ = 10;
   double min_scan_match_score_ = 0.20;
   double min_scan_match_score_improvement_ = 0.003;
@@ -206,15 +255,17 @@ private:
   std::size_t min_old_keyframe_separation_for_correction_ = 8;
   double loop_closure_correction_strength_ = 0.35;
 
+  SimpleSlamConfig config_;
+
   int scans_integrated_ = 0;
   int stationary_scans_skipped_ = 0;
   int scan_match_used_count_ = 0;
   int loop_closure_count_ = 0;
   int loop_closure_correction_count_ = 0;
-  int last_scan_match_scan_ = -100000;
-  int last_loop_closure_scan_ = -100000;
-  int last_correction_scan_ = -100000;
-  std::size_t last_corrected_old_keyframe_ = std::numeric_limits<std::size_t>::max();
+  int last_scan_match_scan_index_ = -100000;
+  int last_loop_closure_scan_index_ = -100000;
+  int last_correction_scan_index_ = -100000;
+  std::size_t last_corrected_matched_keyframe_index_ = std::numeric_limits<std::size_t>::max();
 };
 
 }  // namespace slam
