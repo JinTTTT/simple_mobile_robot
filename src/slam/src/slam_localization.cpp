@@ -32,7 +32,7 @@ void SlamLocalization::configure(const SimpleSlamConfig & config)
   last_scan_match_scan_index_ = -100000;
 }
 
-void SlamLocalization::markMapDirty()
+void SlamLocalization::markMapDirtyForScanMatching()
 {
   likelihood_field_dirty_ = true;
 }

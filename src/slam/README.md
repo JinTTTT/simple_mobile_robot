@@ -85,6 +85,52 @@ scan matching can correct the guess
 the chosen pose updates the map
 ```
 
+## Code Organization
+
+The SLAM package is split into a small ROS wrapper plus algorithm files.
+
+The ROS wrapper is:
+
+```text
+src/slam/src/simple_slam_node.cpp
+```
+
+It owns ROS 2 subscriptions, publishers, TF broadcasting, parameter loading, and logging.
+It should not contain the SLAM algorithm itself.
+
+The main algorithm coordinator is:
+
+```text
+src/slam/include/slam/simple_slam.hpp
+src/slam/src/simple_slam.cpp
+```
+
+`SimpleSlam` keeps the full SLAM flow readable:
+
+```text
+odometry prediction
+localization correction
+map update
+keyframe and loop-closure update
+```
+
+The three learning parts are:
+
+- `SlamMapper`: builds live and corrected occupancy grid maps
+- `SlamLocalization`: does local scan matching against the current map
+- `LoopClosure`: stores keyframes, detects returns to old places, and applies simple correction
+
+The shared data types live in:
+
+```text
+src/slam/include/slam/simple_slam_types.hpp
+```
+
+This includes `Pose2D`, `KeyFrame`, `SimpleSlamConfig`, and result structs.
+
+This structure is intentionally not split too much.
+The goal is to keep each big concept separate while still making the full SLAM pipeline easy to follow.
+
 ## Inputs
 
 The node subscribes to:
@@ -197,6 +243,45 @@ This package also adds new learning methods:
 
 The correction is intentionally simple. It corrects the published keyframe trajectory and rebuilds `/corrected_map`. It does not change the live robot pose.
 
+## Parameters
+
+SLAM tuning lives in:
+
+```text
+src/slam/config/slam.yaml
+```
+
+The launch file loads this config:
+
+```bash
+ros2 launch slam simple_slam.launch.py
+```
+
+The main parameter groups are:
+
+- map size and resolution
+- log-odds update strength
+- scan matching search window and acceptance thresholds
+- movement threshold before map updates
+- keyframe spacing
+- loop-closure detection thresholds
+- loop-closure correction strength
+
+Important examples:
+
+- `resolution`: map cell size in meters
+- `width`, `height`: map size in cells
+- `scan_match_xy_range`: how far scan matching searches left/right/forward/back
+- `scan_match_theta_range`: how far scan matching searches in heading
+- `min_scan_match_score_improvement`: how much better the match must be than odometry
+- `keyframe_min_translation`: distance before saving a new keyframe
+- `loop_closure_search_radius`: how close poses must be before comparing scan signatures
+- `loop_closure_correction_strength`: how strongly accepted loop closures bend the corrected path
+
+The values are read when the node starts.
+If you edit `slam.yaml`, restart the SLAM launch file.
+This is runtime configuration: you can tune behavior without changing and rebuilding C++ code.
+
 ## Simple Loop-Closure Correction
 
 When loop closure says:
@@ -297,7 +382,7 @@ Current limits:
 - `/corrected_map` is rebuilt from keyframes only, so it may be less dense than `/map`
 - live `/estimated_pose` and live `/map` are not reset to the corrected trajectory
 - scan matching is still local and can fail in repeated geometry or large drift
-- tuning values are still hard-coded
+- parameters are loaded at startup, but they are not dynamically updated while the node runs
 
 It can correct small odometry errors, detect some returns to old places, show a simple corrected trajectory, and rebuild a keyframe-based corrected map.
 

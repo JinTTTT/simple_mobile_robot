@@ -60,7 +60,7 @@ void LoopClosure::addKeyFrame(
   keyframe_initialized_ = true;
 }
 
-LoopClosureResult LoopClosure::detect(int scans_integrated)
+LoopClosureResult LoopClosure::detectLoopClosure(int scans_integrated)
 {
   if (keyframes_.size() <= static_cast<std::size_t>(min_loop_closure_keyframe_age_)) {
     return {};
@@ -121,8 +121,10 @@ LoopClosureResult LoopClosure::detect(int scans_integrated)
   result.matched_scan_index = matched_keyframe.scan_index;
   result.signature_difference = best_signature_difference;
 
-  if (shouldApplyCorrection(best_candidate_index, current_keyframe_index, scans_integrated)) {
-    applyCorrection(best_candidate_index, current_keyframe_index, scans_integrated);
+  if (shouldApplyLoopClosureCorrection(
+      best_candidate_index, current_keyframe_index, scans_integrated))
+  {
+    applyLoopClosureCorrection(best_candidate_index, current_keyframe_index, scans_integrated);
     result.correction_applied = true;
   }
 
@@ -149,7 +151,7 @@ int LoopClosure::loopClosureCorrectionCount() const
   return loop_closure_correction_count_;
 }
 
-bool LoopClosure::shouldApplyCorrection(
+bool LoopClosure::shouldApplyLoopClosureCorrection(
   std::size_t matched_keyframe_index,
   std::size_t current_keyframe_index,
   int scans_integrated) const
@@ -180,7 +182,7 @@ bool LoopClosure::shouldApplyCorrection(
   return true;
 }
 
-void LoopClosure::applyCorrection(
+void LoopClosure::applyLoopClosureCorrection(
   std::size_t matched_keyframe_index,
   std::size_t current_keyframe_index,
   int scans_integrated)

@@ -21,7 +21,7 @@ public:
     const sensor_msgs::msg::LaserScan & scan,
     const Pose2D & slam_pose,
     int scan_index);
-  LoopClosureResult detect(int scans_integrated);
+  LoopClosureResult detectLoopClosure(int scans_integrated);
 
   const std::vector<KeyFrame> & keyframes() const;
   std::size_t keyframeCount() const;
@@ -29,11 +29,11 @@ public:
   int loopClosureCorrectionCount() const;
 
 private:
-  bool shouldApplyCorrection(
+  bool shouldApplyLoopClosureCorrection(
     std::size_t matched_keyframe_index,
     std::size_t current_keyframe_index,
     int scans_integrated) const;
-  void applyCorrection(
+  void applyLoopClosureCorrection(
     std::size_t matched_keyframe_index,
     std::size_t current_keyframe_index,
     int scans_integrated);

@@ -51,6 +51,7 @@ SlamUpdateResult SimpleSlam::handleScan(
     return update;
   }
 
+  // 1. Odometry gives the first guess for where the robot moved.
   bool moved_enough = odomMovedEnough(last_odom_pose_, current_odom_pose_);
   Pose2D predicted_pose = applyOdomDeltaToSlamPose(last_odom_pose_, current_odom_pose_);
   last_odom_pose_ = current_odom_pose_;
@@ -61,6 +62,7 @@ SlamUpdateResult SimpleSlam::handleScan(
     return update;
   }
 
+  // 2. Localization tries to improve the odometry guess by matching the scan to the map.
   update.scan_match = localization_.matchScan(
     scan,
     predicted_pose,
@@ -70,8 +72,9 @@ SlamUpdateResult SimpleSlam::handleScan(
     mapper_.occupiedCellCount());
   slam_pose_ = update.scan_match.pose;
 
+  // 3. Mapping inserts the scan using the best pose estimate.
   mapper_.updateWithScan(scan, slam_pose_, stamp);
-  localization_.markMapDirty();
+  localization_.markMapDirtyForScanMatching();
 
   scan_received_ = true;
   scans_integrated_++;
@@ -81,10 +84,11 @@ SlamUpdateResult SimpleSlam::handleScan(
   update.map_updated = true;
   update.trajectory_updated = true;
 
+  // 4. Loop closure saves keyframes and checks whether we returned to an old place.
   if (loop_closure_.shouldAddKeyFrame(slam_pose_)) {
     loop_closure_.addKeyFrame(scan, slam_pose_, scans_integrated_);
     update.keyframe_added = true;
-    update.loop_closure = loop_closure_.detect(scans_integrated_);
+    update.loop_closure = loop_closure_.detectLoopClosure(scans_integrated_);
     if (update.loop_closure.correction_applied) {
       updateCorrectedTrajectory(stamp);
       mapper_.rebuildCorrectedMap(loop_closure_.keyframes(), stamp);

@@ -13,7 +13,7 @@ class SlamLocalization
 {
 public:
   void configure(const SimpleSlamConfig & config);
-  void markMapDirty();
+  void markMapDirtyForScanMatching();
 
   ScanMatchResult matchScan(
     const sensor_msgs::msg::LaserScan & scan,
