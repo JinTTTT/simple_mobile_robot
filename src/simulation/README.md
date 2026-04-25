@@ -59,6 +59,8 @@ The simulation publishes:
 - `/odom`: `nav_msgs/msg/Odometry`
 - `/scan`: `sensor_msgs/msg/LaserScan`
 - `/tf`: `tf2_msgs/msg/TFMessage`
+- `/ground_truth_pose`: `geometry_msgs/msg/PoseStamped`
+- `/ground_truth_path`: `nav_msgs/msg/Path`
 
 `/cmd_vel` is the velocity command topic.
 Keyboard teleop publishes to this topic when you press movement keys.
@@ -70,6 +72,9 @@ The localization package uses it as motion input.
 `/scan` gives the 2D lidar measurements.
 Mapping uses it to update the occupancy grid.
 Localization uses it to compare the robot pose against the known map.
+
+`/ground_truth_pose` and `/ground_truth_path` come from the package's `ground_truth_pose_publisher`.
+They are optional simulator-only debugging topics and are useful when comparing estimated motion against the actual Gazebo motion.
 
 ## Characteristics
 
@@ -194,7 +199,7 @@ For mapping or localization, the fixed frame is usually `map`.
 For mapping:
 
 ```bash
-ros2 run mapping occupancy_mapper
+ros2 run mapping occupancy_mapper_node
 ```
 
 The mapper reads `/scan` and TF from the simulation and publishes `/map`.

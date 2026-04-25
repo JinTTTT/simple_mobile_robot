@@ -372,7 +372,7 @@ Current issues:
 
 - both localization nodes publish `/estimated_pose` and `map -> odom`, so they cannot run together
 - the particle filter uses a simple likelihood field sensor model
-- the particle filter estimate is a simple average and does not publish covariance
+- the particle filter estimate still does not publish covariance
 - the Kalman filter assumes the initial pose is already close to the real pose
 - the Kalman filter can lose track if the scan match is outside the local search window
 - global localization can still fail in symmetric map areas

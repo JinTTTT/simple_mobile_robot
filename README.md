@@ -1,4 +1,4 @@
-# Mobile Robot Full Stack Learning Repo
+# Simple Mobile Robot Software Stack: Simulation, Mapping, Localization, SLAM, Planning, and Control
 
 This repo is my place to learn the full software stack of a mobile robot.
 
@@ -7,10 +7,10 @@ The long term goal is to learn:
 - simulation: finished
 - mapping: finished
 - localization : finished
-- SLAM : first version finished
-- planning : A* planner with collision clearance and smoothing finished
-- path follow / control : pure pursuit first version finished
-- navigation : in planning
+- SLAM : finished
+- motion planning : finished
+- path follow control : finished
+- navigation : in progress
 
 ## Packages
 
@@ -143,7 +143,7 @@ It publishes:
 
 Simple logic:
 
-- use the Kalman localization pose as the robot start
+- use the current `/estimated_pose` localization output as the robot start
 - use the RViz goal pose as the planning target
 - inflate obstacles using a conservative circular robot radius from the simulation geometry
 - convert start and goal from world coordinates into map grid cells
@@ -171,12 +171,12 @@ Package launch file:
 
 This package is the next learning layer after global path planning.
 
-It will read:
+It reads:
 
 - `/smoothed_planned_path`
 - `/estimated_pose`
 
-It will publish:
+It publishes:
 
 - `/cmd_vel`
 
@@ -268,7 +268,7 @@ The mapper needs robot movement to see the world.
 ### 3. Start mapper
 
 ```bash
-ros2 run mapping occupancy_mapper
+ros2 run mapping occupancy_mapper_node
 ```
 
 ### 4. View in RViz
@@ -393,23 +393,71 @@ During normal driving:
 - `/trajectory` is the raw path
 - `/corrected_trajectory` is the loop-corrected keyframe path
 
+## Run Case 4: Motion Planning and Control
+### 1. Start simulation
+
+```bash
+ros2 launch simulation bringup_simulation.launch.py
+```
+### 2. Start the static map server
+
+```bash
+ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=src/mapping/maps/maze_map.yaml
+``` 
+start the lifecycle node:
+
+```bash
+ros2 run nav2_util lifecycle_bringup map_server
+```
+### 3. Start localization
+Use particle filter:
+```bash
+ros2 launch localization particle_filter_localization.launch.py
+```
+Or use Kalman filter:
+```bash
+ros2 launch localization kalman_localization.launch.py
+```
+### 4. Start motion planning
+```bash
+ros2 launch motion_planning motion_planning.launch.py
+```
+### 5. Start path follow control
+```bash
+ros2 launch path_follow_control path_follow_control.launch.py
+```
+
+### 6. Start RViz
+
+```bash
+rviz2
+```
+
+In RViz:
+
+- set Fixed Frame to `map`
+- add `/map`
+- add `/inflated_map`
+- add `/planned_path`
+- add `/smoothed_planned_path`
+- add `/lookahead_point`
+- use the `2D Goal Pose` tool to send a goal with a final heading
+
 ## Project Structure
 
 ```text
 gazebo_ws/
 ├── README.md
 └── src/
-    ├── slam/
     ├── simulation/
     ├── mapping/
-    └── localization/
+    ├── localization/
+    ├── slam/
+    ├── motion_planning/
+    └── path_follow_control/
+
 ```
 
 ## Current Issues and Future Improvements
 
-- Simulation works.
-- Mapping works as a basic occupancy grid mapper.
-- Localization includes a particle-filter node with likelihood-field scan scoring.
-- Localization includes a simple Kalman-filter node with odometry prediction, scan-matching correction, and covariance output.
-- SLAM v1 includes live mapping, local scan matching, trajectory history, loop-closure detection, simple trajectory correction, and corrected-map rebuilding.
-- SLAM v1 still has known limitations in wall-hit / odometry-disagreement cases and does not yet include pose graph optimization.
+- SLAM still has known limitations in wall-hit / odometry-disagreement cases and does not yet include pose graph optimization.
