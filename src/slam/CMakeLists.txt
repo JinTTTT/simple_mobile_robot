@@ -23,7 +23,10 @@ if(BUILD_TESTING)
 endif()
 
 add_library(simple_slam_lib
+  src/loop_closure.cpp
   src/simple_slam.cpp
+  src/slam_localization.cpp
+  src/slam_mapper.cpp
 )
 
 target_include_directories(simple_slam_lib PUBLIC
