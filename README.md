@@ -116,7 +116,7 @@ Simple logic:
 
 - predict pose from odometry
 - use local scan matching for small pose correction
-- build a live occupancy-grid map
+- build a live occupancy-grid map with the shared mapper from `mapping`
 - store trajectory history and keyframes
 - detect loop closure from old keyframes
 - apply a simple evenly spread trajectory correction

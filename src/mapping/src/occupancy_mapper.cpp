@@ -6,7 +6,7 @@
 void OccupancyMapper::configure(const Config & config)
 {
   config_ = config;
-  map_log_odds_.assign(config_.width * config_.height, 0.0);
+  clear();
 
   // Use a standard inverse sensor model:
   // - hit_probability is the occupancy probability added at the laser endpoint
@@ -14,6 +14,11 @@ void OccupancyMapper::configure(const Config & config)
   //   and should therefore stay below 0.5, producing a negative log-odds increment
   log_odds_hit_ = std::log(config_.hit_probability / (1.0 - config_.hit_probability));
   log_odds_pass_ = std::log(config_.free_probability / (1.0 - config_.free_probability));
+}
+
+void OccupancyMapper::clear()
+{
+  map_log_odds_.assign(config_.width * config_.height, 0.0);
 }
 
 bool OccupancyMapper::worldToGrid(double wx, double wy, int & gx, int & gy) const
@@ -30,6 +35,21 @@ bool OccupancyMapper::isValidCell(int x, int y) const
 
 void OccupancyMapper::updateWithScan(
   const sensor_msgs::msg::LaserScan & scan,
+  double robot_x,
+  double robot_y,
+  double robot_theta)
+{
+  ScanData scan_data;
+  scan_data.ranges = scan.ranges;
+  scan_data.angle_min = scan.angle_min;
+  scan_data.angle_increment = scan.angle_increment;
+  scan_data.range_min = scan.range_min;
+  scan_data.range_max = scan.range_max;
+  updateWithScanData(scan_data, robot_x, robot_y, robot_theta);
+}
+
+void OccupancyMapper::updateWithScanData(
+  const ScanData & scan,
   double robot_x,
   double robot_y,
   double robot_theta)
@@ -97,6 +117,11 @@ nav_msgs::msg::OccupancyGrid OccupancyMapper::buildOccupancyGridMsg(
   map_msg.data.resize(map_log_odds_.size(), -1);
 
   for (std::size_t i = 0; i < map_log_odds_.size(); ++i) {
+    if (config_.publish_unknown_for_unobserved && map_log_odds_[i] == 0.0) {
+      map_msg.data[i] = -1;
+      continue;
+    }
+
     const double probability = 1.0 / (1.0 + std::exp(-map_log_odds_[i]));
     map_msg.data[i] = static_cast<std::int8_t>(probability * 100.0);
   }

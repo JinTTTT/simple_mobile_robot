@@ -116,7 +116,7 @@ keyframe and loop-closure update
 
 The three learning parts are:
 
-- `SlamMapper`: builds live and corrected occupancy grid maps
+- `SlamMapper`: coordinates live and corrected occupancy grid maps by reusing the shared `mapping::OccupancyMapper`
 - `SlamLocalization`: does local scan matching against the current map
 - `LoopClosure`: stores keyframes, detects returns to old places, and applies simple correction
 
@@ -130,6 +130,14 @@ This includes `Pose2D`, `KeyFrame`, `SimpleSlamConfig`, and result structs.
 
 This structure is intentionally not split too much.
 The goal is to keep each big concept separate while still making the full SLAM pipeline easy to follow.
+
+The map-building code is no longer a separate copy inside the SLAM package.
+`SlamMapper` now wraps two instances of the reusable mapper from the `mapping` package:
+
+- one for the live online map
+- one for rebuilding `/corrected_map` from corrected keyframes
+
+That keeps the inverse sensor model, ray tracing, and log-odds update behavior aligned with the standalone mapping package.
 
 ## Inputs
 
@@ -208,14 +216,14 @@ scan matching is allowed only when it is clearly helpful
 
 ## Reused Methods From Existing Packages
 
-From `mapping`, this package reuses the ideas of:
+From `mapping`, this package now directly reuses the shared occupancy-grid mapper implementation for:
 
 - occupancy grid maps
 - log-odds map updates
 - Bresenham ray tracing
 - marking cells along a beam as free
 - marking the laser hit cell as occupied
-- publishing `/map`
+- rebuilding maps from stored scans
 
 From `localization`, this package reuses the ideas of:
 

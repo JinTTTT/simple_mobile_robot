@@ -7,6 +7,7 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -32,10 +33,12 @@ add_library(occupancy_mapper_lib
 )
 
 target_include_directories(occupancy_mapper_lib PUBLIC
-  include
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
 )
 
 ament_target_dependencies(occupancy_mapper_lib
+  builtin_interfaces
   nav_msgs
   sensor_msgs
 )
@@ -45,7 +48,8 @@ add_executable(occupancy_mapper_node
 )
 
 target_include_directories(occupancy_mapper_node PUBLIC
-  include
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
 )
 
 target_link_libraries(occupancy_mapper_node
@@ -64,8 +68,19 @@ ament_target_dependencies(occupancy_mapper_node
 
 install(TARGETS
   occupancy_mapper_lib
+  EXPORT export_mapping
+  DESTINATION lib/${PROJECT_NAME}
+  INCLUDES DESTINATION include
+)
+
+install(TARGETS
   occupancy_mapper_node
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY
+  include/
+  DESTINATION include
 )
 
 install(DIRECTORY
@@ -73,5 +88,13 @@ install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}
 )
+
+ament_export_include_directories(include)
+ament_export_dependencies(
+  builtin_interfaces
+  nav_msgs
+  sensor_msgs
+)
+ament_export_targets(export_mapping HAS_LIBRARY_TARGET)
 
 ament_package()

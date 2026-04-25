@@ -14,6 +14,15 @@
 class OccupancyMapper
 {
 public:
+  struct ScanData
+  {
+    std::vector<float> ranges;
+    float angle_min = 0.0F;
+    float angle_increment = 0.0F;
+    float range_min = 0.0F;
+    float range_max = 0.0F;
+  };
+
   struct Config
   {
     double resolution = 0.05;
@@ -25,14 +34,21 @@ public:
     double free_probability = 0.05;
     double log_odds_min = -10.0;
     double log_odds_max = 10.0;
+    bool publish_unknown_for_unobserved = false;
   };
 
   void configure(const Config & config);
+  void clear();
 
   bool worldToGrid(double wx, double wy, int & gx, int & gy) const;
   bool isValidCell(int x, int y) const;
   void updateWithScan(
     const sensor_msgs::msg::LaserScan & scan,
+    double robot_x,
+    double robot_y,
+    double robot_theta);
+  void updateWithScanData(
+    const ScanData & scan,
     double robot_x,
     double robot_y,
     double robot_theta);

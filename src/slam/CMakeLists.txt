@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(builtin_interfaces REQUIRED)
+find_package(mapping REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -36,10 +37,15 @@ target_include_directories(simple_slam_lib PUBLIC
 ament_target_dependencies(simple_slam_lib
   builtin_interfaces
   geometry_msgs
+  mapping
   sensor_msgs
   nav_msgs
   tf2
   tf2_geometry_msgs
+)
+
+target_link_libraries(simple_slam_lib
+  mapping::occupancy_mapper_lib
 )
 
 add_executable(simple_slam_node

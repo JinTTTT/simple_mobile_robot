@@ -27,6 +27,9 @@ This package has two map sources:
 The live mapper is useful for learning how occupancy grid mapping works.
 The generated PGM map is cleaner and is currently better for localization testing.
 
+The package now also exports the `OccupancyMapper` class as a reusable C++ library.
+Other packages can link against `mapping` and reuse the same occupancy-grid insertion logic instead of carrying a second copy.
+
 ## Live Occupancy Grid Mapper
 
 The live mapper creates a 2D grid around the robot.
@@ -90,6 +93,14 @@ Here, the line is one lidar beam from the robot to the measured endpoint.
 Log-odds is used because it makes occupancy updates easy to add over time.
 Free-space evidence decreases the cell value.
 Hit evidence increases the cell value.
+
+The reusable `OccupancyMapper` class now supports:
+
+- normal live updates from `sensor_msgs/msg/LaserScan`
+- clearing and rebuilding a map from scratch
+- optional publishing of untouched cells as `-1` for packages that want explicit unknown-space semantics
+
+The standalone `mapping` node uses the same `OccupancyMapper` library that `slam` now reuses for its live and corrected map generation.
 
 ### Parameters
 
