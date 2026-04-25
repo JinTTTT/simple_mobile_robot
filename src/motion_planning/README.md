@@ -50,13 +50,22 @@ It publishes:
 
 ## Package Structure
 
-The package is now split into a ROS wrapper and a reusable planning core:
+The package is now split into a ROS wrapper, a planner orchestrator, and separate algorithm modules:
 
 - `src/motion_planning_node.cpp`: ROS subscriptions, publishers, parameters, and planning triggers
-- `include/motion_planning/motion_planner.hpp`: planner interface and result types
-- `src/motion_planner.cpp`: A*, map inflation, line-of-sight shortcutting, spline smoothing, and resampling
+- `include/motion_planning/motion_planner.hpp`: top-level planner interface and result types
+- `src/motion_planner.cpp`: planning orchestration, map queries, coordinate conversion, and map inflation
+- `include/motion_planning/a_star_planner.hpp`
+- `src/a_star_planner.cpp`: raw grid search
+- `include/motion_planning/path_shortcutter.hpp`
+- `src/path_shortcutter.cpp`: line-of-sight shortcutting on the grid path
+- `include/motion_planning/spline_path_smoother.hpp`
+- `src/spline_path_smoother.cpp`: natural cubic spline smoothing and collision fallback
+- `include/motion_planning/path_resampler.hpp`
+- `src/path_resampler.cpp`: fixed-spacing resampling of the final world path
+- `include/motion_planning/path_types.hpp`: shared grid and world path data types
 
-This keeps the ROS node thin and moves the planning logic into a clearer core module.
+This keeps the ROS node thin, keeps map ownership inside `MotionPlanner`, and isolates the main planning stages into smaller modules.
 
 ## Parameters
 

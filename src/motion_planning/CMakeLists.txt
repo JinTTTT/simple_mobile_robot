@@ -19,6 +19,10 @@ if(BUILD_TESTING)
 endif()
 
 add_library(motion_planning_core
+  src/a_star_planner.cpp
+  src/path_shortcutter.cpp
+  src/spline_path_smoother.cpp
+  src/path_resampler.cpp
   src/motion_planner.cpp
 )
 

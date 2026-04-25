@@ -1,14 +1,18 @@
 #ifndef MOTION_PLANNING__MOTION_PLANNER_HPP_
 #define MOTION_PLANNING__MOTION_PLANNER_HPP_
 
+#include "motion_planning/a_star_planner.hpp"
+#include "motion_planning/path_resampler.hpp"
+#include "motion_planning/path_shortcutter.hpp"
+#include "motion_planning/path_types.hpp"
+#include "motion_planning/spline_path_smoother.hpp"
+
 #include "builtin_interfaces/msg/time.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/path.hpp"
 
 #include <string>
-#include <utility>
-#include <vector>
 
 struct MotionPlannerConfig
 {
@@ -55,70 +59,33 @@ public:
     const builtin_interfaces::msg::Time & stamp) const;
 
 private:
-  struct OpenSetEntry
-  {
-    int index = -1;
-    double estimated_total_cost = 0.0;
-  };
-
-  struct CompareOpenSetEntry
-  {
-    bool operator()(const OpenSetEntry & left, const OpenSetEntry & right) const;
-  };
-
-  struct PathPoint
-  {
-    double x = 0.0;
-    double y = 0.0;
-  };
-
-  std::vector<int> runAStarSearch(int start_x, int start_y, int goal_x, int goal_y) const;
-  std::vector<int> reconstructCellPath(
-    const std::vector<int> & predecessor_by_index,
-    int goal_index) const;
-  std::vector<int> simplifyPathByLineOfSight(const std::vector<int> & raw_path_indices) const;
-  bool hasLineOfSightBetweenCells(int start_index, int end_index) const;
-  std::vector<std::pair<int, int>> traceLineCells(int x0, int y0, int x1, int y1) const;
-
-  nav_msgs::msg::Path createPathMessageFromGridPath(
-    const std::vector<int> & path_indices,
+  PointPath convertGridPathToWorldPath(const GridPath & grid_path) const;
+  nav_msgs::msg::Path createPathMessageFromWorldPath(
+    const PointPath & world_path,
     const geometry_msgs::msg::PoseStamped & goal_pose,
     const builtin_interfaces::msg::Time & stamp) const;
-  nav_msgs::msg::Path createSplineSmoothedPath(
-    const nav_msgs::msg::Path & base_path,
-    const geometry_msgs::msg::PoseStamped & goal_pose,
-    bool & used_collision_fallback) const;
-  nav_msgs::msg::Path resamplePathAtFixedSpacing(
-    const nav_msgs::msg::Path & input_path,
-    const geometry_msgs::msg::PoseStamped & goal_pose,
-    double sample_spacing) const;
-
-  double computeGridPathYaw(
-    const std::vector<int> & path_indices,
-    std::size_t path_index) const;
-  double computePathLength(const nav_msgs::msg::Path & path) const;
-  std::vector<double> buildArcLengthParameter(const std::vector<PathPoint> & points) const;
-  std::vector<double> extractXPathValues(const std::vector<PathPoint> & points) const;
-  std::vector<double> extractYPathValues(const std::vector<PathPoint> & points) const;
-  std::vector<double> solveNaturalCubicSecondDerivatives(
-    const std::vector<double> & parameter_values,
-    const std::vector<double> & sample_values) const;
-  double evaluateNaturalCubicSpline(
-    const std::vector<double> & parameter_values,
-    const std::vector<double> & sample_values,
-    const std::vector<double> & second_derivatives,
-    double query_value) const;
+  double computePathYaw(const PointPath & world_path, std::size_t path_index) const;
 
   bool worldToGrid(double world_x, double world_y, int & grid_x, int & grid_y) const;
+  bool worldToGridCell(const PathPoint & world_point, GridCell & grid_cell) const;
   void gridToWorld(int grid_x, int grid_y, double & world_x, double & world_y) const;
+  PathPoint gridToWorldPoint(const GridCell & grid_cell) const;
   bool isValidCell(int grid_x, int grid_y) const;
+  bool isValidCell(const GridCell & grid_cell) const;
   bool isCellFreeForPlanning(int grid_x, int grid_y) const;
+  bool isCellFreeForPlanning(const GridCell & grid_cell) const;
   int gridToIndex(int grid_x, int grid_y) const;
-  double computeHeuristicCost(int x0, int y0, int x1, int y1) const;
+  bool isPointInFreeSpace(const PathPoint & world_point) const;
+  bool hasLineOfSightBetweenCells(const GridCell & start_cell, const GridCell & end_cell) const;
+  GridPath traceLineCells(const GridCell & start_cell, const GridCell & end_cell) const;
 
   void rebuildInflatedMap(const builtin_interfaces::msg::Time & stamp);
   bool isValidInflationTarget(int grid_x, int grid_y, int width, int height) const;
 
+  AStarPlanner a_star_planner_;
+  PathShortcutter path_shortcutter_;
+  SplinePathSmoother spline_path_smoother_;
+  PathResampler path_resampler_;
   MotionPlannerConfig config_;
   nav_msgs::msg::OccupancyGrid map_;
   nav_msgs::msg::OccupancyGrid inflated_map_;
