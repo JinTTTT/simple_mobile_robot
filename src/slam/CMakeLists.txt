@@ -7,6 +7,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -21,8 +22,36 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+add_library(simple_slam_lib
+  src/loop_closure.cpp
+  src/simple_slam.cpp
+  src/slam_localization.cpp
+  src/slam_mapper.cpp
+)
+
+target_include_directories(simple_slam_lib PUBLIC
+  include
+)
+
+ament_target_dependencies(simple_slam_lib
+  builtin_interfaces
+  geometry_msgs
+  sensor_msgs
+  nav_msgs
+  tf2
+  tf2_geometry_msgs
+)
+
 add_executable(simple_slam_node
   src/simple_slam_node.cpp
+)
+
+target_include_directories(simple_slam_node PUBLIC
+  include
+)
+
+target_link_libraries(simple_slam_node
+  simple_slam_lib
 )
 
 ament_target_dependencies(simple_slam_node
@@ -36,11 +65,13 @@ ament_target_dependencies(simple_slam_node
 )
 
 install(TARGETS
+  simple_slam_lib
   simple_slam_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY
+  config
   launch
   DESTINATION share/${PROJECT_NAME}
 )
