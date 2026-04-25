@@ -1,9 +1,7 @@
 #include "motion_planning/motion_planner.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <vector>
 
 void MotionPlanner::configure(const MotionPlannerConfig & config)
 {
@@ -37,7 +35,7 @@ int MotionPlanner::inflationRadiusCells() const
 MotionPlanningResult MotionPlanner::plan(
   const geometry_msgs::msg::PoseStamped & start_pose,
   const geometry_msgs::msg::PoseStamped & goal_pose,
-  const builtin_interfaces::msg::Time & stamp) const
+  const builtin_interfaces::msg::Time & /*stamp*/) const
 {
   MotionPlanningResult result;
 
@@ -100,7 +98,7 @@ MotionPlanningResult MotionPlanner::plan(
     raw_grid_path;
 
   const PointPath shortcut_world_path = convertGridPathToWorldPath(shortcut_grid_path);
-  result.shortcut_path = createPathMessageFromWorldPath(shortcut_world_path, goal_pose, stamp);
+  result.shortcut_world_path = shortcut_world_path;
 
   const SplineSmoothingResult smoothing_result =
     config_.enable_cubic_spline_smoothing ?
@@ -113,7 +111,7 @@ MotionPlanningResult MotionPlanner::plan(
 
   const PointPath resampled_world_path = path_resampler_.resampleAtFixedSpacing(
     smoothing_result.path, config_.path_sample_spacing_m);
-  result.final_path = createPathMessageFromWorldPath(resampled_world_path, goal_pose, stamp);
+  result.final_world_path = resampled_world_path;
   result.used_spline_fallback = smoothing_result.used_collision_fallback;
   result.geometry_pose_count = smoothing_result.path.size();
   result.raw_grid_pose_count = raw_grid_path.size();
@@ -130,51 +128,6 @@ PointPath MotionPlanner::convertGridPathToWorldPath(const GridPath & grid_path) 
   }
 
   return world_path;
-}
-
-nav_msgs::msg::Path MotionPlanner::createPathMessageFromWorldPath(
-  const PointPath & world_path,
-  const geometry_msgs::msg::PoseStamped & goal_pose,
-  const builtin_interfaces::msg::Time & stamp) const
-{
-  nav_msgs::msg::Path path_message;
-  path_message.header.stamp = stamp;
-  path_message.header.frame_id = "map";
-  path_message.poses.reserve(world_path.size());
-
-  for (std::size_t path_index = 0; path_index < world_path.size(); ++path_index) {
-    geometry_msgs::msg::PoseStamped pose;
-    pose.header = path_message.header;
-    pose.pose.position.x = world_path[path_index].x;
-    pose.pose.position.y = world_path[path_index].y;
-    pose.pose.position.z = 0.0;
-
-    if (path_index == world_path.size() - 1) {
-      pose.pose.orientation = goal_pose.pose.orientation;
-    } else {
-      const double yaw = computePathYaw(world_path, path_index);
-      pose.pose.orientation.z = std::sin(yaw * 0.5);
-      pose.pose.orientation.w = std::cos(yaw * 0.5);
-    }
-
-    path_message.poses.push_back(pose);
-  }
-
-  return path_message;
-}
-
-double MotionPlanner::computePathYaw(const PointPath & world_path, std::size_t path_index) const
-{
-  if (world_path.size() < 2) {
-    return 0.0;
-  }
-
-  const std::size_t next_path_index = std::min(path_index + 1, world_path.size() - 1);
-  const std::size_t prev_path_index = (path_index == 0) ? 0 : path_index - 1;
-
-  return std::atan2(
-    world_path[next_path_index].y - world_path[prev_path_index].y,
-    world_path[next_path_index].x - world_path[prev_path_index].x);
 }
 
 bool MotionPlanner::worldToGrid(double world_x, double world_y, int & grid_x, int & grid_y) const

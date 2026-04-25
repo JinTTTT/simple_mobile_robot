@@ -10,7 +10,6 @@
 #include "builtin_interfaces/msg/time.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
-#include "nav_msgs/msg/path.hpp"
 
 #include <string>
 
@@ -27,8 +26,8 @@ struct MotionPlanningResult
 {
   bool success = false;
   std::string status_message;
-  nav_msgs::msg::Path shortcut_path;
-  nav_msgs::msg::Path final_path;
+  PointPath shortcut_world_path;
+  PointPath final_world_path;
   bool used_spline_fallback = false;
   std::size_t geometry_pose_count = 0;
   std::size_t raw_grid_pose_count = 0;
@@ -60,11 +59,6 @@ public:
 
 private:
   PointPath convertGridPathToWorldPath(const GridPath & grid_path) const;
-  nav_msgs::msg::Path createPathMessageFromWorldPath(
-    const PointPath & world_path,
-    const geometry_msgs::msg::PoseStamped & goal_pose,
-    const builtin_interfaces::msg::Time & stamp) const;
-  double computePathYaw(const PointPath & world_path, std::size_t path_index) const;
 
   bool worldToGrid(double world_x, double world_y, int & grid_x, int & grid_y) const;
   bool worldToGridCell(const PathPoint & world_point, GridCell & grid_cell) const;

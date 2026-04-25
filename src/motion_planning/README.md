@@ -14,6 +14,9 @@ This package assumes:
 - the start and goal poses are already in the `map` frame
 - unknown cells should be treated as blocked
 
+The planner core works on plain C++ grid and world path types.
+The ROS node converts those paths into `nav_msgs/msg/Path` right before publishing.
+
 ## Current Planning Pipeline
 
 The planner currently does the following:
@@ -54,7 +57,7 @@ The package is now split into a ROS wrapper, a planner orchestrator, and separat
 
 - `src/motion_planning_node.cpp`: ROS subscriptions, publishers, parameters, and planning triggers
 - `include/motion_planning/motion_planner.hpp`: top-level planner interface and result types
-- `src/motion_planner.cpp`: planning orchestration, map queries, coordinate conversion, and map inflation
+- `src/motion_planner.cpp`: planning orchestration, map queries, and map inflation
 - `include/motion_planning/a_star_planner.hpp`
 - `src/a_star_planner.cpp`: raw grid search
 - `include/motion_planning/path_shortcutter.hpp`
@@ -66,6 +69,7 @@ The package is now split into a ROS wrapper, a planner orchestrator, and separat
 - `include/motion_planning/path_types.hpp`: shared grid and world path data types
 
 This keeps the ROS node thin, keeps map ownership inside `MotionPlanner`, and isolates the main planning stages into smaller modules.
+The node now owns ROS path-message construction, so the planner core stays independent of ROS path transport details.
 
 ## Parameters
 

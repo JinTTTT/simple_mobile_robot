@@ -5,6 +5,8 @@
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
 
 class MotionPlanningNode : public rclcpp::Node
@@ -165,13 +167,18 @@ private:
         "Spline-smoothed path entered an occupied or unknown cell. Falling back to non-spline path.");
     }
 
-    path_pub_->publish(planning_result.shortcut_path);
-    smoothed_path_pub_->publish(planning_result.final_path);
+    const nav_msgs::msg::Path shortcut_path =
+      buildPathMessage(planning_result.shortcut_world_path, goal_pose_, this->now());
+    const nav_msgs::msg::Path final_path =
+      buildPathMessage(planning_result.final_world_path, goal_pose_, this->now());
+
+    path_pub_->publish(shortcut_path);
+    smoothed_path_pub_->publish(final_path);
     RCLCPP_INFO(
       this->get_logger(),
       "Published shortcut path with %zu poses and dense final path with %zu poses (geometry path had %zu poses, raw A* path had %zu poses) from (%d, %d) to (%d, %d).",
-      planning_result.shortcut_path.poses.size(),
-      planning_result.final_path.poses.size(),
+      shortcut_path.poses.size(),
+      final_path.poses.size(),
       planning_result.geometry_pose_count,
       planning_result.raw_grid_pose_count,
       planning_result.start_grid_x,
@@ -179,6 +186,51 @@ private:
       planning_result.goal_grid_x,
       planning_result.goal_grid_y);
     return true;
+  }
+
+  nav_msgs::msg::Path buildPathMessage(
+    const PointPath & world_path,
+    const geometry_msgs::msg::PoseStamped & goal_pose,
+    const rclcpp::Time & stamp) const
+  {
+    nav_msgs::msg::Path path_message;
+    path_message.header.stamp = stamp;
+    path_message.header.frame_id = "map";
+    path_message.poses.reserve(world_path.size());
+
+    for (std::size_t path_index = 0; path_index < world_path.size(); ++path_index) {
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header = path_message.header;
+      pose.pose.position.x = world_path[path_index].x;
+      pose.pose.position.y = world_path[path_index].y;
+      pose.pose.position.z = 0.0;
+
+      if (path_index == world_path.size() - 1) {
+        pose.pose.orientation = goal_pose.pose.orientation;
+      } else {
+        const double yaw = computePathYaw(world_path, path_index);
+        pose.pose.orientation.z = std::sin(yaw * 0.5);
+        pose.pose.orientation.w = std::cos(yaw * 0.5);
+      }
+
+      path_message.poses.push_back(pose);
+    }
+
+    return path_message;
+  }
+
+  double computePathYaw(const PointPath & world_path, std::size_t path_index) const
+  {
+    if (world_path.size() < 2) {
+      return 0.0;
+    }
+
+    const std::size_t next_path_index = std::min(path_index + 1, world_path.size() - 1);
+    const std::size_t prev_path_index = (path_index == 0) ? 0 : path_index - 1;
+
+    return std::atan2(
+      world_path[next_path_index].y - world_path[prev_path_index].y,
+      world_path[next_path_index].x - world_path[prev_path_index].x);
   }
 
   MotionPlanner planner_;
