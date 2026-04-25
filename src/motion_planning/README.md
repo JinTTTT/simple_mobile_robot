@@ -1,48 +1,85 @@
 # Motion Planning Package
 
-This package contains learning implementations for motion planning in ROS 2.
+This package computes a global path on a known 2D occupancy grid map.
 
-The first version is a simple A* global planner for a 2D occupancy grid map.
+The current implementation is a learning-focused A* planner for a static map.
+It takes the estimated robot pose as the start state, takes an RViz goal as the target, and publishes both a shortcut path and a dense final path for downstream use.
 
-Inputs:
+## Assumptions
 
-- `/map`
-- `/estimated_pose`
-- `/goal_pose`
+This package assumes:
 
-Output:
+- a static occupancy grid map is available on `/map`
+- localization publishes the robot pose on `/estimated_pose`
+- the start and goal poses are already in the `map` frame
+- unknown cells should be treated as blocked
 
-- `/planned_path` as `nav_msgs/msg/Path`
-- `/smoothed_planned_path` as `nav_msgs/msg/Path`
-- `/inflated_map` as `nav_msgs/msg/OccupancyGrid`
+The planner core works on plain C++ grid and world path types.
+The ROS node converts those paths into `nav_msgs/msg/Path` right before publishing.
 
-Current behavior:
+## Current Planning Pipeline
 
-- uses the static occupancy grid from `map_server`
-- uses the Kalman localization estimated pose as the start pose
-- uses the RViz goal pose as the target
-- inflates obstacles using a conservative circular robot radius of `0.35 m`
-- runs A* on an inflated 8-connected grid
-- first simplifies the raw A* path using line-of-sight shortcutting on `inflated_map`
-- publishes that shortcut result on `/planned_path`
-- then tries natural cubic spline smoothing on the shortcut path
-- uniformly resamples the final chosen geometry at fixed spacing and publishes it on `/smoothed_planned_path`
-- if any spline sample enters occupied or unknown space, the node falls back to the shortcut geometry before the final fixed-spacing resampling step
-- preserves the RViz goal orientation on both published path variants
-- treats unknown cells as blocked
+The planner currently does the following:
 
-How spline smoothing is evaluated:
+- copies the incoming occupancy grid into an internal planning map
+- inflates occupied cells using a conservative circular robot radius
+- converts the start and goal world coordinates into grid cells
+- runs A* on an 8-connected inflated grid
+- applies line-of-sight shortcutting to simplify the raw grid path
+- publishes that shortcut path on `/planned_path`
+- optionally fits a natural cubic spline through the shortcut path
+- rejects the spline if any sampled point enters occupied or unknown space
+- uniformly resamples the accepted geometry at fixed spacing
+- publishes the final dense path on `/smoothed_planned_path`
+- preserves the requested goal orientation on both published path variants
 
-- the spline is sampled from path parameter `t = 0` to the total path length
-- `spline_sample_spacing_m` controls the sampling resolution along the curve
-- for example, `spline_sample_spacing_m = 0.05` means the spline is evaluated about every `5 cm`
-- every sampled spline point is converted back into a map cell with `worldToGrid()`
-- every sampled cell is checked with `isCellFreeForPlanning()`
-- the spline geometry is accepted only if every sampled point stays inside the map and inside a free cell of the inflated map
-- if any sampled point is outside the map, occupied, or unknown, the node logs a warning and falls back to the shortcut geometry
-- after choosing either the spline geometry or the fallback shortcut geometry, the final path is uniformly resampled at `spline_sample_spacing_m`
+## Interfaces
 
-Main tuning parameters:
+The planner node subscribes to:
+
+- `/map`: `nav_msgs/msg/OccupancyGrid`
+- `/estimated_pose`: `geometry_msgs/msg/PoseStamped`
+- `/goal_pose`: `geometry_msgs/msg/PoseStamped`
+
+It publishes:
+
+- `/planned_path`: `nav_msgs/msg/Path`
+- `/smoothed_planned_path`: `nav_msgs/msg/Path`
+- `/inflated_map`: `nav_msgs/msg/OccupancyGrid`
+
+`/planned_path` is the shortcut path after line-of-sight simplification.
+`/smoothed_planned_path` is the dense final path after optional spline smoothing and fixed-spacing resampling.
+`/inflated_map` is the occupancy grid used internally for collision checking and planning.
+
+## Package Structure
+
+The package is now split into a ROS wrapper, a planner orchestrator, and separate algorithm modules:
+
+- `src/motion_planning_node.cpp`: ROS subscriptions, publishers, parameters, and planning triggers
+- `include/motion_planning/motion_planner.hpp`: top-level planner interface and result types
+- `src/motion_planner.cpp`: planning orchestration, map queries, and map inflation
+- `include/motion_planning/a_star_planner.hpp`
+- `src/a_star_planner.cpp`: raw grid search
+- `include/motion_planning/path_shortcutter.hpp`
+- `src/path_shortcutter.cpp`: line-of-sight shortcutting on the grid path
+- `include/motion_planning/spline_path_smoother.hpp`
+- `src/spline_path_smoother.cpp`: natural cubic spline smoothing and collision fallback
+- `include/motion_planning/path_resampler.hpp`
+- `src/path_resampler.cpp`: fixed-spacing resampling of the final world path
+- `include/motion_planning/path_types.hpp`: shared grid and world path data types
+
+This keeps the ROS node thin, keeps map ownership inside `MotionPlanner`, and isolates the main planning stages into smaller modules.
+The node now owns ROS path-message construction, so the planner core stays independent of ROS path transport details.
+
+## Parameters
+
+Planner tuning lives in:
+
+```text
+src/motion_planning/config/motion_planning.yaml
+```
+
+Main parameters:
 
 - `robot_radius_m`
 - `occupied_threshold`
@@ -50,20 +87,82 @@ Main tuning parameters:
 - `enable_cubic_spline_smoothing`
 - `spline_sample_spacing_m`
 
-Config file:
+Behavior notes:
 
-- `config/motion_planning.yaml`
+- `robot_radius_m` controls obstacle inflation before planning
+- `enable_path_smoothing` enables line-of-sight shortcutting
+- `enable_cubic_spline_smoothing` enables spline smoothing after shortcutting
+- `spline_sample_spacing_m` is used for spline sampling and final fixed-spacing resampling
 
-Launch file:
+## Run And Visualize
 
-- `launch/motion_planning.launch.py`
+Build the package from the workspace root:
 
-How to test:
+```bash
+cd ~/workspace/gazebo_ws
+colcon build --packages-select motion_planning
+source install/setup.bash
+```
 
-- start simulation
-- start the static map server with `src/mapping/maps/maze_map.yaml`
-- start `kalman_localization_node`
-- start `motion_planning_node` or `ros2 launch motion_planning motion_planning.launch.py`
-- open RViz with fixed frame `map`
-- add `/map`, `/inflated_map`, `/planned_path`, and `/smoothed_planned_path`
-- click a goal with the `2D Goal Pose` tool
+Open a new terminal for each command below.
+In each terminal, source the workspace first:
+
+```bash
+cd ~/workspace/gazebo_ws
+source install/setup.bash
+```
+
+Start simulation:
+
+```bash
+ros2 launch simulation bringup_simulation.launch.py
+```
+
+Start the saved map server:
+
+```bash
+ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=src/mapping/maps/maze_map.yaml
+```
+
+Activate the map server:
+
+```bash
+ros2 run nav2_util lifecycle_bringup map_server
+```
+
+Start localization:
+
+```bash
+ros2 launch localization kalman_localization.launch.py
+```
+
+Start motion planning:
+
+```bash
+ros2 launch motion_planning motion_planning.launch.py
+```
+
+Start RViz:
+
+```bash
+rviz2
+```
+
+In RViz:
+
+- set Fixed Frame to `map`
+- add `/map`
+- add `/inflated_map`
+- add `/planned_path`
+- add `/smoothed_planned_path`
+- use the `2D Goal Pose` tool to request a path
+
+## Limitations
+
+The current package is still a simple global planner:
+
+- it only uses a static occupancy grid
+- it does not do local obstacle avoidance
+- it does not replan continuously unless a new goal is requested
+- it assumes the localization pose is already good enough
+- it does not handle dynamic obstacles
