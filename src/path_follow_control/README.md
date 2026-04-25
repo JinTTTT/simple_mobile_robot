@@ -1,47 +1,83 @@
 # Path Follow Control Package
 
-This package is the next learning step after `motion_planning`.
+This package follows the planned path and turns it into velocity commands.
 
 Its role is different from the global planner:
 
 - `motion_planning` decides which path the robot should take
 - `path_follow_control` decides what velocity command the robot should send right now
 
-Inputs:
+The current implementation uses pure pursuit on the planned path from `motion_planning`.
 
-- `/smoothed_planned_path`
-- `/estimated_pose`
+## Assumptions
 
-Output:
+This package assumes:
 
-- `/cmd_vel`
+- a planned path is available on `/smoothed_planned_path`
+- localization publishes the robot pose on `/estimated_pose`
+- the path and pose are both in the `map` frame
+- the path is static while it is being followed
 
-The first version uses pure pursuit for path following on a static planned path.
+The controller core works on plain C++ poses and commands.
+The ROS node converts incoming ROS messages into those plain types and publishes `geometry_msgs/msg/Twist`.
 
-Main goal:
+## Current Control Pipeline
 
-- convert a planned path into smooth robot motion
+The controller currently does the following:
 
-Current behavior:
+- receives the smoothed path from the planner
+- performs an initial heading alignment to the first lookahead target
+- finds the closest point on the path to the robot
+- selects a lookahead target ahead of that closest point
+- computes pure-pursuit curvature in the robot frame
+- reduces linear speed for sharper curvature
+- slows down as the robot approaches the goal
+- rotates in place when the heading error is too large for forward tracking
+- stops at the goal position
+- rotates in place to match the final goal orientation
+- monitors path progress and goal-distance improvement to detect stuck behavior
 
-- rotate toward the path direction
-- follow a lookahead point along the path
-- compute pure-pursuit curvature from the lookahead point in the robot frame
-- set angular speed from `w = v * curvature`
-- reduce linear speed on sharper turns with curvature-based slowdown
-- slow down near the goal
-- stop when the goal position is reached
-- rotate in place to align with the final goal orientation
-- report continuous path progress and goal distance in the logs
-- declare stuck when the robot is commanded to move but does not move enough or reduce goal distance enough over time
+## Interfaces
 
-Main tuning parameters:
+The controller node subscribes to:
+
+- `/smoothed_planned_path`: `nav_msgs/msg/Path`
+- `/estimated_pose`: `geometry_msgs/msg/PoseStamped`
+
+It publishes:
+
+- `/cmd_vel`: `geometry_msgs/msg/Twist`
+- `/lookahead_point`: `geometry_msgs/msg/PointStamped`
+
+`/lookahead_point` is published for visualization of the current pure-pursuit target.
+
+## Package Structure
+
+The package is now split into a ROS wrapper and a reusable controller core:
+
+- `src/path_follow_control_node.cpp`: ROS subscriptions, publishers, parameter loading, logging, and message conversion
+- `include/path_follow_control/path_follow_controller.hpp`: controller interface, config, and result types
+- `src/path_follow_controller.cpp`: pure-pursuit tracking, initial/final alignment, and stuck detection
+- `include/path_follow_control/path_types.hpp`: plain pose/path/command types used by the controller core
+
+This keeps the ROS node thin and isolates the control logic from ROS message handling.
+
+## Parameters
+
+Controller tuning lives in:
+
+```text
+src/path_follow_control/config/path_follow_control.yaml
+```
+
+Main parameters:
 
 - `lookahead_distance`
 - `max_linear_speed`
 - `min_linear_speed`
 - `max_angular_speed`
 - `curvature_slowdown_gain`
+- `initial_alignment_angle_threshold`
 - `rotate_in_place_angle_threshold`
 - `goal_tolerance_distance`
 - `goal_tolerance_angle`
@@ -51,25 +87,83 @@ Main tuning parameters:
 - `min_progress_distance_m`
 - `min_goal_distance_improvement_m`
 
-Config file:
+## Run And Visualize
 
-- `config/path_follow_control.yaml`
+Build the package from the workspace root:
 
-Launch file:
+```bash
+cd ~/workspace/gazebo_ws
+colcon build --packages-select path_follow_control
+source install/setup.bash
+```
 
-- `launch/path_follow_control.launch.py`
+Open a new terminal for each command below.
+In each terminal, source the workspace first:
 
-How to test:
+```bash
+cd ~/workspace/gazebo_ws
+source install/setup.bash
+```
 
-- start simulation
-- start the static map server with `src/mapping/maps/maze_map.yaml`
-- start `kalman_localization_node`
-- start `motion_planning_node`
-- start `path_follow_control_node` or `ros2 launch path_follow_control path_follow_control.launch.py`
-- open RViz with fixed frame `map`
-- add `/map`, `/inflated_map`, `/planned_path`, and `/smoothed_planned_path`
-- click a goal with the `2D Goal Pose` tool, including a desired final heading
+Start simulation:
+
+```bash
+ros2 launch simulation bringup_simulation.launch.py
+```
+
+Start the saved map server:
+
+```bash
+ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=src/mapping/maps/maze_map.yaml
+```
+
+Activate the map server:
+
+```bash
+ros2 run nav2_util lifecycle_bringup map_server
+```
+
+Start localization:
+
+```bash
+ros2 launch localization kalman_localization.launch.py
+```
+
+Start motion planning:
+
+```bash
+ros2 launch motion_planning motion_planning.launch.py
+```
+
+Start path following:
+
+```bash
+ros2 launch path_follow_control path_follow_control.launch.py
+```
+
+Start RViz:
+
+```bash
+rviz2
+```
+
+In RViz:
+
+- set Fixed Frame to `map`
+- add `/map`
+- add `/planned_path`
+- add `/smoothed_planned_path`
+- add `/lookahead_point`
+- use the `2D Goal Pose` tool with a desired final heading
+
+## Limitations
 
 This package is not the global planner.
 It is also not yet a full local planner with dynamic obstacle avoidance.
-Its role is the control layer between path planning and actual robot motion.
+
+Current limitations:
+
+- it follows a static planned path
+- it does not avoid dynamic obstacles
+- it does not replan locally around blocked segments
+- it depends on localization staying accurate enough for path tracking
