@@ -304,10 +304,12 @@ private:
       particle.has_map = true;
     }
 
-    publishState(best_index, msg->header.stamp);
-    if (shouldResample()) {
+    const bool resampled = shouldResample();
+    if (resampled) {
       resampleParticles();
     }
+
+    publishState(best_index, msg->header.stamp);
 
     accepted_update_count_ += 1;
     last_accepted_odom_pose_ = latest_odom_pose_;
@@ -316,10 +318,11 @@ private:
       get_logger(),
       *get_clock(),
       2000,
-      "accepted_updates=%zu keyframes=%zu best_particle=%zu best_pose=(%.3f, %.3f, %.3f)",
+      "accepted_updates=%zu keyframes=%zu best_particle=%zu resampled=%s best_pose=(%.3f, %.3f, %.3f)",
       accepted_update_count_,
       particles_[best_index].trajectory.size(),
       best_index,
+      resampled ? "yes" : "no",
       particles_[best_index].pose.x,
       particles_[best_index].pose.y,
       particles_[best_index].pose.theta);
