@@ -2,8 +2,10 @@
 #include <cmath>
 #include <cstddef>
 #include <deque>
+#include <iomanip>
 #include <functional>
 #include <limits>
+#include <sstream>
 #include <memory>
 #include <random>
 #include <string>
@@ -55,6 +57,8 @@ struct ParticleStats
   double average_score{0.0};
   double min_score{0.0};
   double effective_particle_count{0.0};
+  std::vector<double> raw_scores{};
+  std::vector<double> normalized_scores{};
 };
 
 struct OdomSample
@@ -99,6 +103,20 @@ Pose2D odomMsgToPose(const nav_msgs::msg::Odometry & msg)
   double pitch = 0.0;
   tf2::Matrix3x3(quaternion).getRPY(roll, pitch, pose.theta);
   return pose;
+}
+
+std::string formatScoreList(const std::vector<double> & values)
+{
+  std::ostringstream stream;
+  stream << "[";
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    if (i > 0U) {
+      stream << ", ";
+    }
+    stream << std::fixed << std::setprecision(4) << values[i];
+  }
+  stream << "]";
+  return stream.str();
 }
 
 class LikelihoodField
@@ -316,13 +334,18 @@ private:
 
     propagateParticles(last_accepted_odom_pose_, scan_odom_pose);
 
+    ParticleStats particle_stats;
     if (anyParticleHasMap()) {
-      scoreParticles(*msg);
+      particle_stats = scoreParticles(*msg);
     } else {
       const double equal_weight = 1.0 / static_cast<double>(particles_.size());
       for (auto & particle : particles_) {
         particle.weight = equal_weight;
       }
+      particle_stats.raw_scores.assign(particles_.size(), 0.0);
+      particle_stats.normalized_scores.assign(
+        particles_.size(),
+        1.0 / static_cast<double>(particles_.size()));
     }
 
     const std::size_t best_index = bestParticleIndex();
@@ -339,9 +362,9 @@ private:
       particle.has_map = true;
     }
 
-    const ParticleStats particle_stats = computeParticleStats();
+    const ParticleStats normalized_stats = computeParticleStats();
     publishState(best_index, msg->header.stamp, scan_odom_pose);
-    const bool resampled = shouldResample(particle_stats.effective_particle_count);
+    const bool resampled = shouldResample(normalized_stats.effective_particle_count);
     if (resampled) {
       resampleParticles();
     }
@@ -358,13 +381,20 @@ private:
       best_keyframe_count,
       best_index,
       resampled ? "yes" : "no",
-      particle_stats.effective_particle_count,
-      particle_stats.best_score,
-      particle_stats.average_score,
-      particle_stats.min_score,
+      normalized_stats.effective_particle_count,
+      normalized_stats.best_score,
+      normalized_stats.average_score,
+      normalized_stats.min_score,
       best_pose.x,
       best_pose.y,
       best_pose.theta);
+    RCLCPP_INFO_THROTTLE(
+      get_logger(),
+      *get_clock(),
+      2000,
+      "log_likelihoods=%s normalized_weights=%s",
+      formatScoreList(particle_stats.raw_scores).c_str(),
+      formatScoreList(normalized_stats.normalized_scores).c_str());
   }
 
   bool shouldAcceptUpdate(const Pose2D & current_odom_pose) const
@@ -485,16 +515,23 @@ private:
       [](const Particle & particle) { return particle.has_map; });
   }
 
-  void scoreParticles(const sensor_msgs::msg::LaserScan & scan)
+  ParticleStats scoreParticles(const sensor_msgs::msg::LaserScan & scan)
   {
-    double weight_sum = 0.0;
-    for (auto & particle : particles_) {
+    ParticleStats stats;
+    stats.raw_scores.resize(particles_.size(), 0.0);
+    stats.normalized_scores.resize(particles_.size(), 0.0);
+    constexpr double kMinBeamLikelihood = 1e-9;
+    const double invalid_log_likelihood = -std::numeric_limits<double>::infinity();
+    double max_log_likelihood = invalid_log_likelihood;
+    for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
+      auto & particle = particles_[particle_index];
       if (!particle.has_map || !particle.likelihood_field.hasMap()) {
         particle.weight = 0.0;
+        stats.raw_scores[particle_index] = invalid_log_likelihood;
         continue;
       }
 
-      double score = 0.0;
+      double log_likelihood = 0.0;
       std::size_t used_beams = 0;
 
       for (std::size_t i = 0; i < scan.ranges.size(); i += settings_.scan_beam_step) {
@@ -506,29 +543,61 @@ private:
         const double beam_angle = scan.angle_min + static_cast<double>(i) * scan.angle_increment;
         const double hit_x = particle.pose.x + range * std::cos(particle.pose.theta + beam_angle);
         const double hit_y = particle.pose.y + range * std::sin(particle.pose.theta + beam_angle);
-        score += particle.likelihood_field.valueAtWorld(hit_x, hit_y);
+        const double beam_score = particle.likelihood_field.valueAtWorld(hit_x, hit_y);
+        log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
         used_beams++;
       }
 
-      if (used_beams > 0U) {
-        score /= static_cast<double>(used_beams);
+      if (used_beams == 0U) {
+        log_likelihood = invalid_log_likelihood;
       }
 
-      particle.weight = score;
-      weight_sum += score;
+      particle.weight = 0.0;
+      stats.raw_scores[particle_index] = log_likelihood;
+      if (std::isfinite(log_likelihood)) {
+        max_log_likelihood = std::max(max_log_likelihood, log_likelihood);
+      }
+    }
+
+    if (!std::isfinite(max_log_likelihood)) {
+      const double equal_weight = 1.0 / static_cast<double>(particles_.size());
+      for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
+        auto & particle = particles_[particle_index];
+        particle.weight = equal_weight;
+        stats.normalized_scores[particle_index] = equal_weight;
+      }
+      return stats;
+    }
+
+    double weight_sum = 0.0;
+    for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
+      auto & particle = particles_[particle_index];
+      const double log_likelihood = stats.raw_scores[particle_index];
+      if (std::isfinite(log_likelihood)) {
+        particle.weight = std::exp(log_likelihood - max_log_likelihood);
+        weight_sum += particle.weight;
+      } else {
+        particle.weight = 0.0;
+      }
     }
 
     if (weight_sum <= 0.0 || !std::isfinite(weight_sum)) {
       const double equal_weight = 1.0 / static_cast<double>(particles_.size());
-      for (auto & particle : particles_) {
+      for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
+        auto & particle = particles_[particle_index];
         particle.weight = equal_weight;
+        stats.normalized_scores[particle_index] = equal_weight;
       }
-      return;
+      return stats;
     }
 
-    for (auto & particle : particles_) {
+    for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
+      auto & particle = particles_[particle_index];
       particle.weight /= weight_sum;
+      stats.normalized_scores[particle_index] = particle.weight;
     }
+
+    return stats;
   }
 
   std::size_t bestParticleIndex() const
@@ -548,6 +617,8 @@ private:
       return stats;
     }
 
+    stats.raw_scores.reserve(particles_.size());
+    stats.normalized_scores.reserve(particles_.size());
     stats.min_score = std::numeric_limits<double>::max();
     double weight_square_sum = 0.0;
 
@@ -556,6 +627,7 @@ private:
       stats.min_score = std::min(stats.min_score, particle.weight);
       stats.average_score += particle.weight;
       weight_square_sum += particle.weight * particle.weight;
+      stats.normalized_scores.push_back(particle.weight);
     }
 
     stats.average_score /= static_cast<double>(particles_.size());
