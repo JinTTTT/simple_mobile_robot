@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -54,6 +55,12 @@ struct ParticleStats
   double average_score{0.0};
   double min_score{0.0};
   double effective_particle_count{0.0};
+};
+
+struct OdomSample
+{
+  rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+  Pose2D pose{};
 };
 
 double normalizeAngle(double angle)
@@ -274,12 +281,14 @@ private:
 
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
-    latest_odom_msg_ = msg;
-    latest_odom_pose_ = odomMsgToPose(*msg);
+    const Pose2D odom_pose = odomMsgToPose(*msg);
+    const rclcpp::Time odom_stamp(msg->header.stamp);
+    odom_buffer_.push_back(OdomSample{odom_stamp, odom_pose});
+    pruneOdomBuffer(odom_stamp);
     have_odom_ = true;
 
     if (!have_last_accepted_odom_) {
-      last_accepted_odom_pose_ = latest_odom_pose_;
+      last_accepted_odom_pose_ = odom_pose;
       have_last_accepted_odom_ = true;
       RCLCPP_INFO_ONCE(get_logger(), "Received first odometry message.");
     }
@@ -291,11 +300,21 @@ private:
       return;
     }
 
-    if (!shouldAcceptUpdate()) {
+    Pose2D scan_odom_pose;
+    if (!lookupOdomPoseAtStamp(msg->header.stamp, scan_odom_pose)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        2000,
+        "Could not align /odom to scan stamp. Skipping scan update.");
       return;
     }
 
-    propagateParticles(last_accepted_odom_pose_, latest_odom_pose_);
+    if (!shouldAcceptUpdate(scan_odom_pose)) {
+      return;
+    }
+
+    propagateParticles(last_accepted_odom_pose_, scan_odom_pose);
 
     if (anyParticleHasMap()) {
       scoreParticles(*msg);
@@ -307,6 +326,8 @@ private:
     }
 
     const std::size_t best_index = bestParticleIndex();
+    const Pose2D best_pose = particles_[best_index].pose;
+    const std::size_t best_keyframe_count = particles_[best_index].trajectory.size() + 1U;
     for (auto & particle : particles_) {
       Particle::TrajectoryPose trajectory_pose;
       trajectory_pose.pose = particle.pose;
@@ -319,14 +340,14 @@ private:
     }
 
     const ParticleStats particle_stats = computeParticleStats();
-    publishState(best_index, msg->header.stamp);
+    publishState(best_index, msg->header.stamp, scan_odom_pose);
     const bool resampled = shouldResample(particle_stats.effective_particle_count);
     if (resampled) {
       resampleParticles();
     }
 
     accepted_update_count_ += 1;
-    last_accepted_odom_pose_ = latest_odom_pose_;
+    last_accepted_odom_pose_ = scan_odom_pose;
 
     RCLCPP_INFO_THROTTLE(
       get_logger(),
@@ -334,28 +355,88 @@ private:
       2000,
       "accepted_updates=%zu keyframes=%zu best_particle=%zu resampled=%s N_eff=%.2f best_score=%.4f avg_score=%.4f min_score=%.4f best_pose=(%.3f, %.3f, %.3f)",
       accepted_update_count_,
-      particles_[best_index].trajectory.size(),
+      best_keyframe_count,
       best_index,
       resampled ? "yes" : "no",
       particle_stats.effective_particle_count,
       particle_stats.best_score,
       particle_stats.average_score,
       particle_stats.min_score,
-      particles_[best_index].pose.x,
-      particles_[best_index].pose.y,
-      particles_[best_index].pose.theta);
+      best_pose.x,
+      best_pose.y,
+      best_pose.theta);
   }
 
-  bool shouldAcceptUpdate() const
+  bool shouldAcceptUpdate(const Pose2D & current_odom_pose) const
   {
-    const double dx = latest_odom_pose_.x - last_accepted_odom_pose_.x;
-    const double dy = latest_odom_pose_.y - last_accepted_odom_pose_.y;
+    const double dx = current_odom_pose.x - last_accepted_odom_pose_.x;
+    const double dy = current_odom_pose.y - last_accepted_odom_pose_.y;
     const double translation = std::hypot(dx, dy);
     const double rotation = std::abs(
-      normalizeAngle(latest_odom_pose_.theta - last_accepted_odom_pose_.theta));
+      normalizeAngle(current_odom_pose.theta - last_accepted_odom_pose_.theta));
 
     return translation >= settings_.min_translation_for_update ||
            rotation >= settings_.min_rotation_for_update;
+  }
+
+  void pruneOdomBuffer(const rclcpp::Time & newest_stamp)
+  {
+    const rclcpp::Duration max_history = rclcpp::Duration::from_seconds(5.0);
+    while (!odom_buffer_.empty() && (newest_stamp - odom_buffer_.front().stamp) > max_history) {
+      odom_buffer_.pop_front();
+    }
+  }
+
+  bool lookupOdomPoseAtStamp(
+    const builtin_interfaces::msg::Time & target_stamp_msg,
+    Pose2D & interpolated_pose) const
+  {
+    if (odom_buffer_.empty()) {
+      return false;
+    }
+
+    const rclcpp::Time target_stamp(target_stamp_msg);
+    const rclcpp::Duration tolerance = rclcpp::Duration::from_seconds(0.10);
+
+    if (target_stamp <= odom_buffer_.front().stamp) {
+      if ((odom_buffer_.front().stamp - target_stamp) <= tolerance) {
+        interpolated_pose = odom_buffer_.front().pose;
+        return true;
+      }
+      return false;
+    }
+
+    if (target_stamp >= odom_buffer_.back().stamp) {
+      if ((target_stamp - odom_buffer_.back().stamp) <= tolerance) {
+        interpolated_pose = odom_buffer_.back().pose;
+        return true;
+      }
+      return false;
+    }
+
+    for (std::size_t i = 1; i < odom_buffer_.size(); ++i) {
+      const OdomSample & older = odom_buffer_[i - 1];
+      const OdomSample & newer = odom_buffer_[i];
+
+      if (target_stamp > newer.stamp) {
+        continue;
+      }
+
+      const double dt = (newer.stamp - older.stamp).seconds();
+      if (dt <= 1e-9) {
+        interpolated_pose = newer.pose;
+        return true;
+      }
+
+      const double ratio = (target_stamp - older.stamp).seconds() / dt;
+      interpolated_pose.x = older.pose.x + ratio * (newer.pose.x - older.pose.x);
+      interpolated_pose.y = older.pose.y + ratio * (newer.pose.y - older.pose.y);
+      interpolated_pose.theta = normalizeAngle(
+        older.pose.theta + ratio * normalizeAngle(newer.pose.theta - older.pose.theta));
+      return true;
+    }
+
+    return false;
   }
 
   void propagateParticles(const Pose2D & old_pose, const Pose2D & new_pose)
@@ -546,7 +627,10 @@ private:
     particles_ = std::move(new_particles);
   }
 
-  void publishState(std::size_t best_index, const builtin_interfaces::msg::Time & stamp)
+  void publishState(
+    std::size_t best_index,
+    const builtin_interfaces::msg::Time & stamp,
+    const Pose2D & odom_pose_at_stamp)
   {
     const Particle & best_particle = particles_[best_index];
     if (best_particle.has_map) {
@@ -589,10 +673,13 @@ private:
     estimated_pose.pose.orientation = yawToQuaternion(best_particle.pose.theta);
     estimated_pose_pub_->publish(estimated_pose);
 
-    publishMapToOdomTf(best_particle.pose, stamp);
+    publishMapToOdomTf(best_particle.pose, odom_pose_at_stamp, stamp);
   }
 
-  void publishMapToOdomTf(const Pose2D & slam_pose, const builtin_interfaces::msg::Time & stamp)
+  void publishMapToOdomTf(
+    const Pose2D & slam_pose,
+    const Pose2D & odom_pose,
+    const builtin_interfaces::msg::Time & stamp)
   {
     tf2::Quaternion map_to_base_rotation;
     map_to_base_rotation.setRPY(0.0, 0.0, slam_pose.theta);
@@ -602,10 +689,10 @@ private:
     map_to_base.setRotation(map_to_base_rotation);
 
     tf2::Quaternion odom_to_base_rotation;
-    odom_to_base_rotation.setRPY(0.0, 0.0, latest_odom_pose_.theta);
+    odom_to_base_rotation.setRPY(0.0, 0.0, odom_pose.theta);
 
     tf2::Transform odom_to_base;
-    odom_to_base.setOrigin(tf2::Vector3(latest_odom_pose_.x, latest_odom_pose_.y, 0.0));
+    odom_to_base.setOrigin(tf2::Vector3(odom_pose.x, odom_pose.y, 0.0));
     odom_to_base.setRotation(odom_to_base_rotation);
 
     tf2::Transform map_to_odom = map_to_base * odom_to_base.inverse();
@@ -625,8 +712,7 @@ private:
 
   std::vector<Particle> particles_{};
 
-  nav_msgs::msg::Odometry::SharedPtr latest_odom_msg_{};
-  Pose2D latest_odom_pose_{};
+  std::deque<OdomSample> odom_buffer_{};
   Pose2D last_accepted_odom_pose_{};
   bool have_odom_{false};
   bool have_last_accepted_odom_{false};
