@@ -11,6 +11,7 @@
 #include "builtin_interfaces/msg/time.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "mapping/occupancy_mapper.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -19,6 +20,9 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
+#include "tf2/LinearMath/Transform.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 
 namespace
 {
@@ -42,6 +46,14 @@ struct Settings
   double rotation_noise_base{0.001};
   double min_translation_for_update{0.10};
   double min_rotation_for_update{0.08};
+};
+
+struct ParticleStats
+{
+  double best_score{0.0};
+  double average_score{0.0};
+  double min_score{0.0};
+  double effective_particle_count{0.0};
 };
 
 double normalizeAngle(double angle)
@@ -223,10 +235,12 @@ public:
     particle_pub_ = create_publisher<geometry_msgs::msg::PoseArray>("/particlecloud", 10);
     best_path_pub_ = create_publisher<nav_msgs::msg::Path>("/best_path", 10);
     estimated_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/estimated_pose", 10);
+    tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     RCLCPP_INFO(
       get_logger(),
-      "fastslam_node started with %d particles and motion thresholds (%.2f m, %.2f rad).",
+      "fastslam_node started with %d particles and motion thresholds (%.2f m, %.2f rad). "
+      "Outputs include TF map->odom.",
       settings_.num_particles,
       settings_.min_translation_for_update,
       settings_.min_rotation_for_update);
@@ -304,12 +318,12 @@ private:
       particle.has_map = true;
     }
 
-    const bool resampled = shouldResample();
+    const ParticleStats particle_stats = computeParticleStats();
+    publishState(best_index, msg->header.stamp);
+    const bool resampled = shouldResample(particle_stats.effective_particle_count);
     if (resampled) {
       resampleParticles();
     }
-
-    publishState(best_index, msg->header.stamp);
 
     accepted_update_count_ += 1;
     last_accepted_odom_pose_ = latest_odom_pose_;
@@ -318,11 +332,15 @@ private:
       get_logger(),
       *get_clock(),
       2000,
-      "accepted_updates=%zu keyframes=%zu best_particle=%zu resampled=%s best_pose=(%.3f, %.3f, %.3f)",
+      "accepted_updates=%zu keyframes=%zu best_particle=%zu resampled=%s N_eff=%.2f best_score=%.4f avg_score=%.4f min_score=%.4f best_pose=(%.3f, %.3f, %.3f)",
       accepted_update_count_,
       particles_[best_index].trajectory.size(),
       best_index,
       resampled ? "yes" : "no",
+      particle_stats.effective_particle_count,
+      particle_stats.best_score,
+      particle_stats.average_score,
+      particle_stats.min_score,
       particles_[best_index].pose.x,
       particles_[best_index].pose.y,
       particles_[best_index].pose.theta);
@@ -442,18 +460,39 @@ private:
         [](const Particle & lhs, const Particle & rhs) { return lhs.weight < rhs.weight; })));
   }
 
-  bool shouldResample() const
+  ParticleStats computeParticleStats() const
   {
+    ParticleStats stats;
+    if (particles_.empty()) {
+      return stats;
+    }
+
+    stats.min_score = std::numeric_limits<double>::max();
     double weight_square_sum = 0.0;
+
     for (const auto & particle : particles_) {
+      stats.best_score = std::max(stats.best_score, particle.weight);
+      stats.min_score = std::min(stats.min_score, particle.weight);
+      stats.average_score += particle.weight;
       weight_square_sum += particle.weight * particle.weight;
     }
 
-    if (weight_square_sum <= 0.0 || !std::isfinite(weight_square_sum)) {
-      return false;
+    stats.average_score /= static_cast<double>(particles_.size());
+    if (stats.min_score == std::numeric_limits<double>::max()) {
+      stats.min_score = 0.0;
+    }
+    if (weight_square_sum > 0.0 && std::isfinite(weight_square_sum)) {
+      stats.effective_particle_count = 1.0 / weight_square_sum;
     }
 
-    const double effective_particle_count = 1.0 / weight_square_sum;
+    return stats;
+  }
+
+  bool shouldResample(double effective_particle_count) const
+  {
+    if (effective_particle_count <= 0.0 || !std::isfinite(effective_particle_count)) {
+      return false;
+    }
     return effective_particle_count < (0.5 * static_cast<double>(particles_.size()));
   }
 
@@ -549,6 +588,34 @@ private:
     estimated_pose.pose.position.y = best_particle.pose.y;
     estimated_pose.pose.orientation = yawToQuaternion(best_particle.pose.theta);
     estimated_pose_pub_->publish(estimated_pose);
+
+    publishMapToOdomTf(best_particle.pose, stamp);
+  }
+
+  void publishMapToOdomTf(const Pose2D & slam_pose, const builtin_interfaces::msg::Time & stamp)
+  {
+    tf2::Quaternion map_to_base_rotation;
+    map_to_base_rotation.setRPY(0.0, 0.0, slam_pose.theta);
+
+    tf2::Transform map_to_base;
+    map_to_base.setOrigin(tf2::Vector3(slam_pose.x, slam_pose.y, 0.0));
+    map_to_base.setRotation(map_to_base_rotation);
+
+    tf2::Quaternion odom_to_base_rotation;
+    odom_to_base_rotation.setRPY(0.0, 0.0, latest_odom_pose_.theta);
+
+    tf2::Transform odom_to_base;
+    odom_to_base.setOrigin(tf2::Vector3(latest_odom_pose_.x, latest_odom_pose_.y, 0.0));
+    odom_to_base.setRotation(odom_to_base_rotation);
+
+    tf2::Transform map_to_odom = map_to_base * odom_to_base.inverse();
+
+    geometry_msgs::msg::TransformStamped msg;
+    msg.header.stamp = stamp;
+    msg.header.frame_id = "map";
+    msg.child_frame_id = "odom";
+    msg.transform = tf2::toMsg(map_to_odom);
+    tf_broadcaster_->sendTransform(msg);
   }
 
   Settings settings_{};
@@ -571,6 +638,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr particle_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr best_path_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr estimated_pose_pub_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 };
 
 }  // namespace
