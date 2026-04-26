@@ -6,9 +6,13 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(builtin_interfaces REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(mapping REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(tf2 REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -22,9 +26,17 @@ add_executable(fastslam_node
 )
 
 ament_target_dependencies(fastslam_node
+  builtin_interfaces
+  geometry_msgs
+  mapping
   nav_msgs
   rclcpp
   sensor_msgs
+  tf2
+)
+
+target_link_libraries(fastslam_node
+  mapping::occupancy_mapper_lib
 )
 
 install(TARGETS
