@@ -42,6 +42,11 @@ struct Settings
   int num_particles{20};
   std::size_t scan_beam_step{10};
   double likelihood_max_distance{0.5};
+  int ray_occupied_threshold{65};
+  double ray_occupied_crossing_penalty{2.0};
+  double ray_penalty_max_per_beam{6.0};
+  std::size_t ray_endpoint_margin_cells{2};
+  double published_particle_switch_ratio{1.25};
   double translation_noise_from_translation{0.01};
   double translation_noise_base{0.001};
   double rotation_noise_from_rotation{0.02};
@@ -65,6 +70,12 @@ struct OdomSample
 {
   rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
   Pose2D pose{};
+};
+
+struct GridCell
+{
+  int x{0};
+  int y{0};
 };
 
 double normalizeAngle(double angle)
@@ -117,6 +128,40 @@ std::string formatScoreList(const std::vector<double> & values)
   }
   stream << "]";
   return stream.str();
+}
+
+std::vector<GridCell> bresenhamLine(int x0, int y0, int x1, int y1)
+{
+  std::vector<GridCell> cells;
+
+  const int dx = std::abs(x1 - x0);
+  const int dy = std::abs(y1 - y0);
+  const int sx = (x0 < x1) ? 1 : -1;
+  const int sy = (y0 < y1) ? 1 : -1;
+  int err = dx - dy;
+
+  int x = x0;
+  int y = y0;
+
+  while (true) {
+    cells.push_back(GridCell{x, y});
+
+    if (x == x1 && y == y1) {
+      break;
+    }
+
+    const int e2 = 2 * err;
+    if (e2 > -dy) {
+      err -= dy;
+      x += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      y += sy;
+    }
+  }
+
+  return cells;
 }
 
 class LikelihoodField
@@ -222,6 +267,7 @@ private:
 
 struct Particle
 {
+  std::size_t id{0};
   Pose2D pose{};
   double weight{0.0};
   struct TrajectoryPose
@@ -276,7 +322,10 @@ private:
   {
     particles_.assign(static_cast<std::size_t>(settings_.num_particles), Particle{});
     const double initial_weight = 1.0 / static_cast<double>(settings_.num_particles);
+    next_particle_id_ = 0U;
+    published_particle_id_ = kInvalidParticleId;
     for (auto & particle : particles_) {
+      particle.id = next_particle_id_++;
       particle.pose = Pose2D{};
       particle.weight = initial_weight;
       particle.trajectory.clear();
@@ -349,8 +398,6 @@ private:
     }
 
     const std::size_t best_index = bestParticleIndex();
-    const Pose2D best_pose = particles_[best_index].pose;
-    const std::size_t best_keyframe_count = particles_[best_index].trajectory.size() + 1U;
     for (auto & particle : particles_) {
       Particle::TrajectoryPose trajectory_pose;
       trajectory_pose.pose = particle.pose;
@@ -363,7 +410,11 @@ private:
     }
 
     const ParticleStats normalized_stats = computeParticleStats();
-    publishState(best_index, msg->header.stamp, scan_odom_pose);
+    const std::size_t published_index = selectPublishedParticleIndex(best_index);
+    const Pose2D published_pose = particles_[published_index].pose;
+    const std::size_t published_keyframe_count =
+      particles_[published_index].trajectory.size();
+    publishState(published_index, msg->header.stamp, scan_odom_pose);
     const bool resampled = shouldResample(normalized_stats.effective_particle_count);
     if (resampled) {
       resampleParticles();
@@ -376,18 +427,19 @@ private:
       get_logger(),
       *get_clock(),
       2000,
-      "accepted_updates=%zu keyframes=%zu best_particle=%zu resampled=%s N_eff=%.2f best_score=%.4f avg_score=%.4f min_score=%.4f best_pose=(%.3f, %.3f, %.3f)",
+      "accepted_updates=%zu keyframes=%zu best_particle=%zu published_particle=%zu resampled=%s N_eff=%.2f best_score=%.4f avg_score=%.4f min_score=%.4f published_pose=(%.3f, %.3f, %.3f)",
       accepted_update_count_,
-      best_keyframe_count,
+      published_keyframe_count,
       best_index,
+      published_index,
       resampled ? "yes" : "no",
       normalized_stats.effective_particle_count,
       normalized_stats.best_score,
       normalized_stats.average_score,
       normalized_stats.min_score,
-      best_pose.x,
-      best_pose.y,
-      best_pose.theta);
+      published_pose.x,
+      published_pose.y,
+      published_pose.theta);
     RCLCPP_INFO_THROTTLE(
       get_logger(),
       *get_clock(),
@@ -536,15 +588,37 @@ private:
 
       for (std::size_t i = 0; i < scan.ranges.size(); i += settings_.scan_beam_step) {
         const float range = scan.ranges[i];
-        if (!std::isfinite(range) || range < scan.range_min || range > scan.range_max) {
+        if (std::isnan(range) || range < scan.range_min) {
+          continue;
+        }
+
+        bool endpoint_is_hit = false;
+        double scoring_range = scan.range_max;
+        if (std::isfinite(range)) {
+          scoring_range = std::min(static_cast<double>(range), static_cast<double>(scan.range_max));
+          endpoint_is_hit = range < scan.range_max;
+        } else if (!std::isinf(range)) {
+          continue;
+        }
+
+        if (scoring_range <= scan.range_min) {
           continue;
         }
 
         const double beam_angle = scan.angle_min + static_cast<double>(i) * scan.angle_increment;
-        const double hit_x = particle.pose.x + range * std::cos(particle.pose.theta + beam_angle);
-        const double hit_y = particle.pose.y + range * std::sin(particle.pose.theta + beam_angle);
-        const double beam_score = particle.likelihood_field.valueAtWorld(hit_x, hit_y);
-        log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
+        const double world_angle = particle.pose.theta + beam_angle;
+        const double hit_x = particle.pose.x + scoring_range * std::cos(world_angle);
+        const double hit_y = particle.pose.y + scoring_range * std::sin(world_angle);
+        if (endpoint_is_hit) {
+          const double beam_score = particle.likelihood_field.valueAtWorld(hit_x, hit_y);
+          log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
+        }
+        log_likelihood -= rayCrossingPenalty(
+          particle.map_msg,
+          particle.pose,
+          world_angle,
+          scoring_range,
+          endpoint_is_hit);
         used_beams++;
       }
 
@@ -600,6 +674,96 @@ private:
     return stats;
   }
 
+  bool worldToMapCell(
+    const nav_msgs::msg::OccupancyGrid & map,
+    double wx,
+    double wy,
+    int & cell_x,
+    int & cell_y) const
+  {
+    if (map.info.resolution <= 0.0) {
+      return false;
+    }
+
+    const double origin_x = map.info.origin.position.x;
+    const double origin_y = map.info.origin.position.y;
+    cell_x = static_cast<int>(std::floor((wx - origin_x) / map.info.resolution));
+    cell_y = static_cast<int>(std::floor((wy - origin_y) / map.info.resolution));
+    return cell_x >= 0 && cell_y >= 0 &&
+           cell_x < static_cast<int>(map.info.width) &&
+           cell_y < static_cast<int>(map.info.height);
+  }
+
+  int mapCellValue(const nav_msgs::msg::OccupancyGrid & map, int cell_x, int cell_y) const
+  {
+    if (cell_x < 0 || cell_y < 0 ||
+      cell_x >= static_cast<int>(map.info.width) ||
+      cell_y >= static_cast<int>(map.info.height))
+    {
+      return -1;
+    }
+
+    const int index = cell_y * static_cast<int>(map.info.width) + cell_x;
+    return map.data[static_cast<std::size_t>(index)];
+  }
+
+  double rayCrossingPenalty(
+    const nav_msgs::msg::OccupancyGrid & map,
+    const Pose2D & particle_pose,
+    double world_angle,
+    double range,
+    bool endpoint_is_hit) const
+  {
+    if (map.data.empty()) {
+      return 0.0;
+    }
+
+    int start_x = 0;
+    int start_y = 0;
+    if (!worldToMapCell(map, particle_pose.x, particle_pose.y, start_x, start_y)) {
+      return 0.0;
+    }
+
+    const double end_x = particle_pose.x + range * std::cos(world_angle);
+    const double end_y = particle_pose.y + range * std::sin(world_angle);
+    int end_cell_x = 0;
+    int end_cell_y = 0;
+    if (!worldToMapCell(map, end_x, end_y, end_cell_x, end_cell_y)) {
+      return 0.0;
+    }
+
+    const auto cells = bresenhamLine(start_x, start_y, end_cell_x, end_cell_y);
+    if (cells.size() <= 1U) {
+      return 0.0;
+    }
+
+    std::size_t end_exclusive = cells.size();
+    if (endpoint_is_hit) {
+      end_exclusive = settings_.ray_endpoint_margin_cells >= end_exclusive ?
+        1U :
+        end_exclusive - settings_.ray_endpoint_margin_cells;
+    }
+
+    double penalty = 0.0;
+    bool inside_occupied_run = false;
+    for (std::size_t i = 1; i < end_exclusive; ++i) {
+      const int cell_value = mapCellValue(map, cells[i].x, cells[i].y);
+      const bool occupied = cell_value >= settings_.ray_occupied_threshold;
+
+      if (occupied && !inside_occupied_run) {
+        penalty += settings_.ray_occupied_crossing_penalty;
+        inside_occupied_run = true;
+        if (penalty >= settings_.ray_penalty_max_per_beam) {
+          return settings_.ray_penalty_max_per_beam;
+        }
+      } else if (!occupied) {
+        inside_occupied_run = false;
+      }
+    }
+
+    return penalty;
+  }
+
   std::size_t bestParticleIndex() const
   {
     return static_cast<std::size_t>(std::distance(
@@ -608,6 +772,43 @@ private:
         particles_.begin(),
         particles_.end(),
         [](const Particle & lhs, const Particle & rhs) { return lhs.weight < rhs.weight; })));
+  }
+
+  std::size_t findParticleById(std::size_t id) const
+  {
+    const auto iterator = std::find_if(
+      particles_.begin(),
+      particles_.end(),
+      [id](const Particle & particle) { return particle.id == id; });
+    if (iterator == particles_.end()) {
+      return particles_.size();
+    }
+
+    return static_cast<std::size_t>(std::distance(particles_.begin(), iterator));
+  }
+
+  std::size_t selectPublishedParticleIndex(std::size_t best_index)
+  {
+    if (particles_.empty()) {
+      return 0U;
+    }
+
+    std::size_t current_index = findParticleById(published_particle_id_);
+    if (current_index >= particles_.size() || !particles_[current_index].has_map) {
+      published_particle_id_ = particles_[best_index].id;
+      return best_index;
+    }
+
+    const Particle & current_particle = particles_[current_index];
+    const Particle & best_particle = particles_[best_index];
+    const double switch_threshold =
+      current_particle.weight * settings_.published_particle_switch_ratio;
+    if (best_index != current_index && best_particle.weight > switch_threshold) {
+      published_particle_id_ = best_particle.id;
+      return best_index;
+    }
+
+    return current_index;
   }
 
   ParticleStats computeParticleStats() const
@@ -680,6 +881,7 @@ private:
 
     std::vector<Particle> new_particles;
     new_particles.reserve(particles_.size());
+    bool preserved_published_particle = false;
 
     double pointer = start_distribution(rng_);
     const double step = 1.0 / static_cast<double>(particles_.size());
@@ -691,6 +893,11 @@ private:
       }
 
       Particle copied = particles_[particle_index];
+      if (copied.id == published_particle_id_ && !preserved_published_particle) {
+        preserved_published_particle = true;
+      } else {
+        copied.id = next_particle_id_++;
+      }
       copied.weight = 1.0 / static_cast<double>(particles_.size());
       new_particles.push_back(std::move(copied));
       pointer += step;
@@ -779,10 +986,13 @@ private:
 
   Settings settings_{};
   std::default_random_engine rng_{42U};
+  static constexpr std::size_t kInvalidParticleId = std::numeric_limits<std::size_t>::max();
 
   OccupancyMapper::Config map_config_{};
 
   std::vector<Particle> particles_{};
+  std::size_t next_particle_id_{0U};
+  std::size_t published_particle_id_{kInvalidParticleId};
 
   std::deque<OdomSample> odom_buffer_{};
   Pose2D last_accepted_odom_pose_{};
