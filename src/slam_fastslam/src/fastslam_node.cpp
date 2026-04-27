@@ -272,6 +272,7 @@ public:
   FastSlamNode()
   : Node("fastslam_node")
   {
+    loadParameters();
     configureMapConfig();
     initializeParticles();
 
@@ -302,6 +303,56 @@ public:
   }
 
 private:
+  void loadParameters()
+  {
+    const int num_particles =
+      static_cast<int>(declare_parameter<int>("num_particles", settings_.num_particles));
+    settings_.num_particles = std::max(1, num_particles);
+
+    const int scan_beam_step = static_cast<int>(
+      declare_parameter<int>("scan_beam_step", static_cast<int>(settings_.scan_beam_step)));
+    settings_.scan_beam_step = static_cast<std::size_t>(
+      std::max(1, scan_beam_step));
+
+    settings_.likelihood_max_distance =
+      std::max(
+        0.01,
+        declare_parameter<double>("likelihood_max_distance", settings_.likelihood_max_distance));
+
+    settings_.translation_noise_from_translation = std::max(
+      0.0,
+      declare_parameter<double>(
+        "translation_noise_from_translation", settings_.translation_noise_from_translation));
+    settings_.translation_noise_base =
+      std::max(
+        0.0,
+        declare_parameter<double>("translation_noise_base", settings_.translation_noise_base));
+    settings_.rotation_noise_from_rotation = std::max(
+      0.0,
+      declare_parameter<double>("rotation_noise_from_rotation", settings_.rotation_noise_from_rotation));
+    settings_.rotation_noise_from_translation = std::max(
+      0.0,
+      declare_parameter<double>(
+        "rotation_noise_from_translation", settings_.rotation_noise_from_translation));
+    settings_.rotation_noise_base =
+      std::max(0.0, declare_parameter<double>("rotation_noise_base", settings_.rotation_noise_base));
+
+    settings_.min_translation_for_update = std::max(
+      0.0,
+      declare_parameter<double>("min_translation_for_update", settings_.min_translation_for_update));
+    settings_.min_rotation_for_update =
+      std::max(
+        0.0,
+        declare_parameter<double>("min_rotation_for_update", settings_.min_rotation_for_update));
+
+    map_config_.resolution =
+      std::max(0.001, declare_parameter<double>("map_resolution", map_config_.resolution));
+    const int map_width = static_cast<int>(declare_parameter<int>("map_width", map_config_.width));
+    const int map_height = static_cast<int>(declare_parameter<int>("map_height", map_config_.height));
+    map_config_.width = std::max(1, map_width);
+    map_config_.height = std::max(1, map_height);
+  }
+
   void initializeParticles()
   {
     particles_.assign(static_cast<std::size_t>(settings_.num_particles), Particle{});
@@ -321,9 +372,6 @@ private:
 
   void configureMapConfig()
   {
-    map_config_.resolution = 0.05;
-    map_config_.width = 500;
-    map_config_.height = 500;
     map_config_.origin_x =
       -static_cast<double>(map_config_.width) * map_config_.resolution / 2.0;
     map_config_.origin_y =
