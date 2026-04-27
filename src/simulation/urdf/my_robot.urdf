@@ -200,7 +200,7 @@
 
             <topic>/cmd_vel</topic>
             
-            <odom_topic>odom</odom_topic>
+            <odom_topic>odom_raw</odom_topic>
             <tf_topic>tf_gazebo_exact</tf_topic>
             <frame_id>odom</frame_id>
             <child_frame_id>base_link</child_frame_id>
