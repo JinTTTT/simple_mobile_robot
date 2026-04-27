@@ -18,4 +18,4 @@ fastslam_node:
 
     min_translation_for_update: 0.10
     min_rotation_for_update: 0.08
-    resample_min_eff_ratio: 0.2
+    resample_min_eff_ratio: 0.4
