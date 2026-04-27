@@ -1,0 +1,30 @@
+odometry_noise_node:
+  ros__parameters:
+    # Thrun's velocity motion model (Probabilistic Robotics, Ch. 5)
+    #
+    #   sigma_v^2     = alpha1 * v^2 + alpha2 * omega^2
+    #   sigma_omega^2 = alpha3 * v^2 + alpha4 * omega^2
+    #
+    # Interpretation:
+    #   alpha1 — linear noise from linear motion   (wheel slip along direction of travel)
+    #   alpha2 — linear noise from angular motion  (lateral slip during turning)
+    #   alpha3 — angular noise from linear motion  (heading drift while going straight)
+    #   alpha4 — angular noise from angular motion (turning rate inaccuracy)
+    #
+    # At v=0.5 m/s, omega=0:
+    #   sigma_v     = sqrt(alpha1) * 0.5  →  alpha1=0.1  gives ~16% noise on velocity
+    #   sigma_omega = sqrt(alpha3) * 0.5  →  alpha3=0.01 gives ~5% heading drift rate
+    #
+    # Tuning guide:
+    #   - Increase alpha1/alpha4 for more position/heading drift overall
+    #   - Increase alpha2 for more lateral slip during sharp turns
+    #   - Increase alpha3 to make the robot curve while driving straight
+    #   - Set all to 0.0 to recover perfect (Gazebo) odometry
+
+    alpha1: 0.1    # linear noise from linear motion
+    alpha2: 0.01   # linear noise from angular motion
+    alpha3: 0.01   # angular noise from linear motion
+    alpha4: 0.1    # angular noise from angular motion
+
+    input_topic:  "/odom_raw"
+    output_topic: "/odom"

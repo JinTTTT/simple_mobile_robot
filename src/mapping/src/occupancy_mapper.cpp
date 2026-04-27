@@ -23,8 +23,8 @@ void OccupancyMapper::clear()
 
 bool OccupancyMapper::worldToGrid(double wx, double wy, int & gx, int & gy) const
 {
-  gx = static_cast<int>((wx - config_.origin_x) / config_.resolution);
-  gy = static_cast<int>((wy - config_.origin_y) / config_.resolution);
+  gx = static_cast<int>(std::floor((wx - config_.origin_x) / config_.resolution));
+  gy = static_cast<int>(std::floor((wy - config_.origin_y) / config_.resolution));
   return isValidCell(gx, gy);
 }
 
@@ -62,17 +62,28 @@ void OccupancyMapper::updateWithScanData(
 
   for (std::size_t i = 0; i < scan.ranges.size(); ++i) {
     const float range = scan.ranges[i];
-    if (range < scan.range_min || range > scan.range_max || std::isnan(range) ||
-      std::isinf(range))
-    {
+    if (std::isnan(range) || range < scan.range_min || scan.range_max <= scan.range_min) {
       continue;
+    }
+
+    bool endpoint_is_hit = true;
+    double usable_range = range;
+    if (std::isinf(range)) {
+      if (range < 0.0F) {
+        continue;
+      }
+      usable_range = scan.range_max;
+      endpoint_is_hit = false;
+    } else if (range > scan.range_max) {
+      usable_range = scan.range_max;
+      endpoint_is_hit = false;
     }
 
     const double beam_angle = scan.angle_min + static_cast<double>(i) * scan.angle_increment;
     const double world_angle = robot_theta + beam_angle;
 
-    const double end_x = robot_x + range * std::cos(world_angle);
-    const double end_y = robot_y + range * std::sin(world_angle);
+    const double end_x = robot_x + usable_range * std::cos(world_angle);
+    const double end_y = robot_y + usable_range * std::sin(world_angle);
 
     int end_grid_x = 0;
     int end_grid_y = 0;
@@ -85,7 +96,8 @@ void OccupancyMapper::updateWithScanData(
       continue;
     }
 
-    for (std::size_t j = 0; j + 1 < cells.size(); ++j) {
+    const std::size_t free_cell_count = endpoint_is_hit ? cells.size() - 1U : cells.size();
+    for (std::size_t j = 0; j < free_cell_count; ++j) {
       const int index = gridToIndex(cells[j].first, cells[j].second);
       map_log_odds_[index] = clamp(
         map_log_odds_[index] + log_odds_pass_,
@@ -93,11 +105,13 @@ void OccupancyMapper::updateWithScanData(
         config_.log_odds_max);
     }
 
-    const int hit_index = gridToIndex(cells.back().first, cells.back().second);
-    map_log_odds_[hit_index] = clamp(
-      map_log_odds_[hit_index] + log_odds_hit_,
-      config_.log_odds_min,
-      config_.log_odds_max);
+    if (endpoint_is_hit) {
+      const int hit_index = gridToIndex(cells.back().first, cells.back().second);
+      map_log_odds_[hit_index] = clamp(
+        map_log_odds_[hit_index] + log_odds_hit_,
+        config_.log_odds_min,
+        config_.log_odds_max);
+    }
   }
 }
 
