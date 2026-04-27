@@ -3,7 +3,7 @@ fastslam_node:
     num_particles: 20
     scan_beam_step: 10
     likelihood_max_distance: 0.5
-    likelihood_sigma: 0.30
+    likelihood_sigma: 0.20
 
     map_resolution: 0.05
     map_width: 500
@@ -18,4 +18,7 @@ fastslam_node:
 
     min_translation_for_update: 0.10
     min_rotation_for_update: 0.08
-    resample_min_eff_ratio: 0.4
+    resample_min_eff_ratio: 0.3
+
+    free_space_reward_per_cell: 0.01
+    traj_max_poses: 500

@@ -56,6 +56,8 @@ struct Settings
   double min_translation_for_update{0.10};
   double min_rotation_for_update{0.08};
   double resample_min_eff_ratio{0.3};
+  double free_space_reward_per_cell{0.01};
+  std::size_t traj_max_poses{500};
 };
 
 struct ParticleStats
@@ -382,6 +384,15 @@ private:
       0.0,
       declare_parameter<double>("resample_min_eff_ratio", settings_.resample_min_eff_ratio));
 
+    settings_.free_space_reward_per_cell = std::max(
+      0.0,
+      declare_parameter<double>(
+        "free_space_reward_per_cell", settings_.free_space_reward_per_cell));
+
+    const int traj_max_poses = static_cast<int>(
+      declare_parameter<int>("traj_max_poses", static_cast<int>(settings_.traj_max_poses)));
+    settings_.traj_max_poses = static_cast<std::size_t>(std::max(1, traj_max_poses));
+
     map_config_.resolution =
       std::max(0.001, declare_parameter<double>("map_resolution", map_config_.resolution));
     const int map_width = static_cast<int>(declare_parameter<int>("map_width", map_config_.width));
@@ -521,6 +532,9 @@ private:
       trajectory_pose.pose = particle.pose;
       trajectory_pose.stamp = msg->header.stamp;
       particle.trajectory.push_back(trajectory_pose);
+      if (particle.trajectory.size() > settings_.traj_max_poses) {
+        particle.trajectory.erase(particle.trajectory.begin());
+      }
       particle.mapper.updateWithScan(*msg, particle.pose.x, particle.pose.y, particle.pose.theta);
       particle.map_msg = particle.mapper.buildOccupancyGridMsg("map", msg->header.stamp);
       particle.likelihood_field.build(
@@ -737,6 +751,9 @@ private:
         if (beam.endpoint_is_hit) {
           const double beam_score = particle.likelihood_field.valueAtWorld(hit_x, hit_y);
           log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
+        } else {
+          log_likelihood += freeSpaceBeamReward(
+            particle.map_msg, laser_x, laser_y, beam_world_cos, beam_world_sin);
         }
         log_likelihood -= rayCrossingPenalty(
           particle.map_msg,
@@ -887,6 +904,47 @@ private:
     }
 
     return penalty;
+  }
+
+  double freeSpaceBeamReward(
+    const nav_msgs::msg::OccupancyGrid & map,
+    double start_x,
+    double start_y,
+    double beam_world_cos,
+    double beam_world_sin) const
+  {
+    if (map.data.empty() || settings_.free_space_reward_per_cell <= 0.0) {
+      return 0.0;
+    }
+
+    int cx = 0;
+    int cy = 0;
+    if (!worldToMapCell(map, start_x, start_y, cx, cy)) {
+      return 0.0;
+    }
+
+    const double res = map.info.resolution;
+    const int max_steps =
+      static_cast<int>(map.info.width) + static_cast<int>(map.info.height);
+    double reward = 0.0;
+
+    for (int step = 1; step <= max_steps; ++step) {
+      const double wx = start_x + step * res * beam_world_cos;
+      const double wy = start_y + step * res * beam_world_sin;
+      int cell_x = 0;
+      int cell_y = 0;
+      if (!worldToMapCell(map, wx, wy, cell_x, cell_y)) {
+        break;
+      }
+      const int val = mapCellValue(map, cell_x, cell_y);
+      if (val >= 0 && val < 50) {
+        reward += settings_.free_space_reward_per_cell;
+      } else if (val >= 50) {
+        break;
+      }
+    }
+
+    return reward;
   }
 
   std::size_t bestParticleIndex() const
