@@ -9,11 +9,12 @@ fastslam_node:
     map_width: 500
     map_height: 500
 
-    translation_noise_from_translation: 0.01
-    translation_noise_base: 0.001
-    rotation_noise_from_rotation: 0.02
-    rotation_noise_from_translation: 0.005
-    rotation_noise_base: 0.001
+    translation_noise_from_translation: 0.05
+    translation_noise_from_rotation: 0.01
+    translation_noise_base: 0.005
+    rotation_noise_from_rotation: 0.05
+    rotation_noise_from_translation: 0.02
+    rotation_noise_base: 0.005
 
     min_translation_for_update: 0.10
     min_rotation_for_update: 0.08

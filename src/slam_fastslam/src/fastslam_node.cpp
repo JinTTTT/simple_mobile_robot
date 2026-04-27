@@ -47,11 +47,12 @@ struct Settings
   double ray_occupied_crossing_penalty{2.0};
   double ray_penalty_max_per_beam{6.0};
   std::size_t ray_endpoint_margin_cells{2};
-  double translation_noise_from_translation{0.01};
-  double translation_noise_base{0.001};
-  double rotation_noise_from_rotation{0.02};
-  double rotation_noise_from_translation{0.005};
-  double rotation_noise_base{0.001};
+  double translation_noise_from_translation{0.05};
+  double translation_noise_from_rotation{0.01};
+  double translation_noise_base{0.005};
+  double rotation_noise_from_rotation{0.05};
+  double rotation_noise_from_translation{0.02};
+  double rotation_noise_base{0.005};
   double min_translation_for_update{0.10};
   double min_rotation_for_update{0.08};
 };
@@ -343,6 +344,10 @@ private:
       0.0,
       declare_parameter<double>(
         "translation_noise_from_translation", settings_.translation_noise_from_translation));
+    settings_.translation_noise_from_rotation = std::max(
+      0.0,
+      declare_parameter<double>(
+        "translation_noise_from_rotation", settings_.translation_noise_from_rotation));
     settings_.translation_noise_base =
       std::max(
       0.0,
@@ -612,8 +617,10 @@ private:
     }
     const double delta_rot2 = normalizeAngle(new_pose.theta - old_pose.theta - delta_rot1);
 
+    const double total_rotation = std::abs(delta_rot1) + std::abs(delta_rot2);
     const double trans_noise_std =
       settings_.translation_noise_from_translation * delta_trans +
+      settings_.translation_noise_from_rotation * total_rotation +
       settings_.translation_noise_base;
     const double rot1_noise_std =
       settings_.rotation_noise_from_rotation * std::abs(delta_rot1) +
