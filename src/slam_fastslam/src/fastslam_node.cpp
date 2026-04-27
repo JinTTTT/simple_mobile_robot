@@ -23,7 +23,9 @@
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Transform.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_broadcaster.h"
+#include "tf2_ros/transform_listener.h"
 
 namespace
 {
@@ -40,6 +42,7 @@ struct Settings
   int num_particles{20};
   std::size_t scan_beam_step{10};
   double likelihood_max_distance{0.5};
+  double likelihood_sigma{0.15};
   int ray_occupied_threshold{65};
   double ray_occupied_crossing_penalty{2.0};
   double ray_penalty_max_per_beam{6.0};
@@ -159,7 +162,7 @@ std::vector<GridCell> bresenhamLine(int x0, int y0, int x1, int y1)
 class LikelihoodField
 {
 public:
-  void build(const nav_msgs::msg::OccupancyGrid & map, double max_distance_m)
+  void build(const nav_msgs::msg::OccupancyGrid & map, double max_distance_m, double sigma_m)
   {
     field_map_ = map;
 
@@ -216,10 +219,11 @@ public:
       }
     }
 
+    const double two_sigma_sq = 2.0 * sigma_m * sigma_m;
     field_map_.data.assign(static_cast<std::size_t>(total_cells), 0);
     for (int i = 0; i < total_cells; ++i) {
       const double distance_m = distance_to_wall[static_cast<std::size_t>(i)] * resolution;
-      const double likelihood = 1.0 - std::min(distance_m / max_distance_m, 1.0);
+      const double likelihood = std::exp(-(distance_m * distance_m) / two_sigma_sq);
       field_map_.data[static_cast<std::size_t>(i)] =
         static_cast<int8_t>(std::round(likelihood * 100.0));
     }
@@ -300,6 +304,8 @@ public:
     best_path_pub_ = create_publisher<nav_msgs::msg::Path>("/best_path", 10);
     estimated_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/estimated_pose", 10);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
     RCLCPP_INFO(
       get_logger(),
@@ -326,6 +332,11 @@ private:
       std::max(
       0.01,
       declare_parameter<double>("likelihood_max_distance", settings_.likelihood_max_distance));
+
+    settings_.likelihood_sigma =
+      std::max(
+      0.01,
+      declare_parameter<double>("likelihood_sigma", settings_.likelihood_sigma));
 
     settings_.translation_noise_from_translation = std::max(
       0.0,
@@ -408,11 +419,41 @@ private:
     }
   }
 
+  void tryLookupLaserOffset(const std::string & laser_frame_id)
+  {
+    if (laser_offset_known_) {
+      return;
+    }
+    try {
+      const auto tf =
+        tf_buffer_->lookupTransform("base_link", laser_frame_id, tf2::TimePointZero);
+      laser_offset_.x = tf.transform.translation.x;
+      laser_offset_.y = tf.transform.translation.y;
+      tf2::Quaternion q(
+        tf.transform.rotation.x, tf.transform.rotation.y,
+        tf.transform.rotation.z, tf.transform.rotation.w);
+      double roll = 0.0;
+      double pitch = 0.0;
+      tf2::Matrix3x3(q).getRPY(roll, pitch, laser_offset_.theta);
+      laser_offset_known_ = true;
+      RCLCPP_INFO(
+        get_logger(),
+        "Laser offset from base_link: (%.3f m, %.3f m, %.3f rad)",
+        laser_offset_.x, laser_offset_.y, laser_offset_.theta);
+    } catch (const tf2::TransformException & ex) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Laser offset unavailable: %s. Using zero offset.", ex.what());
+    }
+  }
+
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
   {
     if (!have_odom_ || !have_last_accepted_odom_) {
       return;
     }
+
+    tryLookupLaserOffset(msg->header.frame_id);
 
     Pose2D scan_odom_pose;
     if (!lookupOdomPoseAtStamp(msg->header.stamp, scan_odom_pose)) {
@@ -473,7 +514,8 @@ private:
       particle.trajectory.push_back(trajectory_pose);
       particle.mapper.updateWithScan(*msg, particle.pose.x, particle.pose.y, particle.pose.theta);
       particle.map_msg = particle.mapper.buildOccupancyGridMsg("map", msg->header.stamp);
-      particle.likelihood_field.build(particle.map_msg, settings_.likelihood_max_distance);
+      particle.likelihood_field.build(
+        particle.map_msg, settings_.likelihood_max_distance, settings_.likelihood_sigma);
       particle.has_map = true;
     }
 
@@ -676,18 +718,27 @@ private:
       const double cos_theta = std::cos(particle.pose.theta);
       const double sin_theta = std::sin(particle.pose.theta);
 
+      const double laser_x =
+        particle.pose.x + laser_offset_.x * cos_theta - laser_offset_.y * sin_theta;
+      const double laser_y =
+        particle.pose.y + laser_offset_.x * sin_theta + laser_offset_.y * cos_theta;
+      const double laser_theta = particle.pose.theta + laser_offset_.theta;
+      const double cos_laser = std::cos(laser_theta);
+      const double sin_laser = std::sin(laser_theta);
+
       for (const auto & beam : scoring_beams) {
-        const double beam_world_cos = cos_theta * beam.cos_angle - sin_theta * beam.sin_angle;
-        const double beam_world_sin = sin_theta * beam.cos_angle + cos_theta * beam.sin_angle;
-        const double hit_x = particle.pose.x + beam.range * beam_world_cos;
-        const double hit_y = particle.pose.y + beam.range * beam_world_sin;
+        const double beam_world_cos = cos_laser * beam.cos_angle - sin_laser * beam.sin_angle;
+        const double beam_world_sin = sin_laser * beam.cos_angle + cos_laser * beam.sin_angle;
+        const double hit_x = laser_x + beam.range * beam_world_cos;
+        const double hit_y = laser_y + beam.range * beam_world_sin;
         if (beam.endpoint_is_hit) {
           const double beam_score = particle.likelihood_field.valueAtWorld(hit_x, hit_y);
           log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
         }
         log_likelihood -= rayCrossingPenalty(
           particle.map_msg,
-          particle.pose,
+          laser_x,
+          laser_y,
           hit_x,
           hit_y,
           beam.endpoint_is_hit);
@@ -780,7 +831,8 @@ private:
 
   double rayCrossingPenalty(
     const nav_msgs::msg::OccupancyGrid & map,
-    const Pose2D & particle_pose,
+    double start_x,
+    double start_y,
     double end_x,
     double end_y,
     bool endpoint_is_hit) const
@@ -789,9 +841,9 @@ private:
       return 0.0;
     }
 
-    int start_x = 0;
-    int start_y = 0;
-    if (!worldToMapCell(map, particle_pose.x, particle_pose.y, start_x, start_y)) {
+    int start_cell_x = 0;
+    int start_cell_y = 0;
+    if (!worldToMapCell(map, start_x, start_y, start_cell_x, start_cell_y)) {
       return 0.0;
     }
 
@@ -801,7 +853,7 @@ private:
       return 0.0;
     }
 
-    const auto cells = bresenhamLine(start_x, start_y, end_cell_x, end_cell_y);
+    const auto cells = bresenhamLine(start_cell_x, start_cell_y, end_cell_x, end_cell_y);
     if (cells.size() <= 1U) {
       return 0.0;
     }
@@ -1061,7 +1113,7 @@ private:
   }
 
   Settings settings_{};
-  std::default_random_engine rng_{42U};
+  std::default_random_engine rng_{std::random_device{}()};
   static constexpr std::size_t kInvalidParticleId = std::numeric_limits<std::size_t>::max();
 
   OccupancyMapper::Config map_config_{};
@@ -1081,6 +1133,10 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr best_path_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr estimated_pose_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+  Pose2D laser_offset_{};
+  bool laser_offset_known_{false};
 };
 
 }  // namespace
