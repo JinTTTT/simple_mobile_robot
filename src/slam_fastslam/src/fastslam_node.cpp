@@ -55,6 +55,7 @@ struct Settings
   double rotation_noise_base{0.005};
   double min_translation_for_update{0.10};
   double min_rotation_for_update{0.08};
+  double resample_min_eff_ratio{0.3};
 };
 
 struct ParticleStats
@@ -376,6 +377,11 @@ private:
       0.0,
       declare_parameter<double>("min_rotation_for_update", settings_.min_rotation_for_update));
 
+    settings_.resample_min_eff_ratio =
+      std::max(
+      0.0,
+      declare_parameter<double>("resample_min_eff_ratio", settings_.resample_min_eff_ratio));
+
     map_config_.resolution =
       std::max(0.001, declare_parameter<double>("map_resolution", map_config_.resolution));
     const int map_width = static_cast<int>(declare_parameter<int>("map_width", map_config_.width));
@@ -489,6 +495,8 @@ private:
     }
 
     const std::size_t best_index = bestParticleIndex();
+    const double best_weight = particles_[best_index].weight;
+    const double best_log_ll = particles_[best_index].log_likelihood;
     const ParticleStats normalized_stats = computeParticleStats();
 
     std::size_t published_index = selectPublishedParticleIndex(best_index);
@@ -527,8 +535,10 @@ private:
       get_logger(),
       *get_clock(),
       2000,
-      "N_eff=%.2f resampled=%s published=%zu%s",
+      "N_eff=%.1f best_w=%.2f best_ll=%.1f resampled=%s published=%zu%s",
       normalized_stats.effective_particle_count,
+      best_weight,
+      best_log_ll,
       resampled ? "yes" : "no",
       published_index,
       published_killed ? " [replaced by resampling]" : "");
@@ -953,7 +963,8 @@ private:
     if (effective_particle_count <= 0.0 || !std::isfinite(effective_particle_count)) {
       return false;
     }
-    return effective_particle_count < (0.5 * static_cast<double>(particles_.size()));
+    return effective_particle_count <
+           (settings_.resample_min_eff_ratio * static_cast<double>(particles_.size()));
   }
 
   void resampleParticles(std::size_t preserved_particle_id)
