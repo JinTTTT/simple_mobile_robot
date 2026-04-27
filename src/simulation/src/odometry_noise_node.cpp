@@ -1,8 +1,11 @@
 #include "geometry_msgs/msg/quaternion.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 
 #include <cmath>
+#include <memory>
 #include <random>
 
 // Adds realistic drift to Gazebo's perfect odometry using Thrun's velocity motion model
@@ -11,7 +14,8 @@
 //   σ²_v     = α1·v² + α2·ω²   (linear velocity noise)
 //   σ²_ω     = α3·v² + α4·ω²   (angular velocity noise)
 //
-// Noisy velocities are integrated to produce a drifting pose that mimics real encoders.
+// Noisy velocities are integrated to produce a drifting pose, published as both
+// the /odom topic and the odom→base_link TF so the whole stack sees consistent data.
 
 class OdometryNoiseNode : public rclcpp::Node
 {
@@ -24,8 +28,12 @@ public:
     alpha3_ = declare_parameter<double>("alpha3", 0.01);
     alpha4_ = declare_parameter<double>("alpha4", 0.1);
 
-    const auto in  = declare_parameter<std::string>("input_topic",  "/odom_raw");
-    const auto out = declare_parameter<std::string>("output_topic", "/odom");
+    odom_frame_    = declare_parameter<std::string>("odom_frame",    "odom");
+    base_frame_    = declare_parameter<std::string>("base_frame",    "base_link");
+    const auto in  = declare_parameter<std::string>("input_topic",   "/odom_raw");
+    const auto out = declare_parameter<std::string>("output_topic",  "/odom");
+
+    tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       in, 10,
@@ -75,16 +83,18 @@ private:
     noisy_y_     += v_noisy * std::sin(noisy_theta_) * dt;
     noisy_theta_ += omega_noisy * dt;
 
-    // Wrap theta to [-π, π]
+    // Wrap to [-π, π]
     noisy_theta_ = std::atan2(std::sin(noisy_theta_), std::cos(noisy_theta_));
 
-    // Build the noisy odometry message, inheriting header / twist from the source
+    const auto q = quaternionFromYaw(noisy_theta_);
+
+    // --- Publish noisy odometry topic ---
     auto out_msg = *msg;
     out_msg.pose.pose.position.x  = noisy_x_;
     out_msg.pose.pose.position.y  = noisy_y_;
-    out_msg.pose.pose.orientation = quaternionFromYaw(noisy_theta_);
+    out_msg.pose.pose.orientation = q;
 
-    // Per-step pose covariance (diagonal, positional noise from linear, yaw from angular)
+    // Per-step pose covariance (diagonal)
     const double cov_pos = sigma_v * dt * sigma_v * dt;
     const double cov_yaw = sigma_w * dt * sigma_w * dt;
     out_msg.pose.covariance.fill(0.0);
@@ -93,6 +103,18 @@ private:
     out_msg.pose.covariance[35] = cov_yaw;  // yaw
 
     odom_pub_->publish(out_msg);
+
+    // --- Publish odom → base_link TF with the same noisy pose ---
+    geometry_msgs::msg::TransformStamped tf_msg;
+    tf_msg.header.stamp    = msg->header.stamp;
+    tf_msg.header.frame_id = odom_frame_;
+    tf_msg.child_frame_id  = base_frame_;
+    tf_msg.transform.translation.x = noisy_x_;
+    tf_msg.transform.translation.y = noisy_y_;
+    tf_msg.transform.translation.z = 0.0;
+    tf_msg.transform.rotation      = q;
+
+    tf_broadcaster_->sendTransform(tf_msg);
   }
 
   static double yawFromQuaternion(const geometry_msgs::msg::Quaternion & q)
@@ -113,11 +135,13 @@ private:
   }
 
   double alpha1_, alpha2_, alpha3_, alpha4_;
+  std::string odom_frame_, base_frame_;
   bool initialized_ = false;
   double noisy_x_ = 0.0, noisy_y_ = 0.0, noisy_theta_ = 0.0;
   rclcpp::Time last_stamp_{0, 0, RCL_ROS_TIME};
   std::mt19937 rng_;
 
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr    odom_pub_;
 };

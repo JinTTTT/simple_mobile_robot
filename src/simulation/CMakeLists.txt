@@ -8,6 +8,7 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -41,6 +42,7 @@ add_executable(odometry_noise_node
 
 ament_target_dependencies(odometry_noise_node
   rclcpp
+  tf2_ros
   geometry_msgs
   nav_msgs
 )

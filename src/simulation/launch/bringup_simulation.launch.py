@@ -34,8 +34,8 @@ def generate_launch_description():
             '/cmd_vel@geometry_msgs/msg/Twist@ignition.msgs.Twist',
             # Odometry: Gazebo → ROS 2 (perfect physics odometry, before noise injection)
             '/odom_raw@nav_msgs/msg/Odometry@ignition.msgs.Odometry',
-            # Transforms: Gazebo → ROS 2 (coordinate frames)
-            '/tf@tf2_msgs/msg/TFMessage@ignition.msgs.Pose_V',
+            # Perfect odom→base_link TF from Gazebo (debug only; noisy TF is published by odometry_noise_node)
+            '/tf_gazebo_exact@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
             # Lidar scan: Gazebo → ROS 2 (sensor data)
             '/scan@sensor_msgs/msg/LaserScan@ignition.msgs.LaserScan',
             # Ground truth world poses: Gazebo -> ROS 2
