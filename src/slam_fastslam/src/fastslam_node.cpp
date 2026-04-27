@@ -76,6 +76,14 @@ struct GridCell
   int y{0};
 };
 
+struct CachedScanBeam
+{
+  double range{0.0};
+  double cos_angle{1.0};
+  double sin_angle{0.0};
+  bool endpoint_is_hit{false};
+};
+
 double normalizeAngle(double angle)
 {
   while (angle > M_PI) {
@@ -316,8 +324,8 @@ private:
 
     settings_.likelihood_max_distance =
       std::max(
-        0.01,
-        declare_parameter<double>("likelihood_max_distance", settings_.likelihood_max_distance));
+      0.01,
+      declare_parameter<double>("likelihood_max_distance", settings_.likelihood_max_distance));
 
     settings_.translation_noise_from_translation = std::max(
       0.0,
@@ -325,30 +333,37 @@ private:
         "translation_noise_from_translation", settings_.translation_noise_from_translation));
     settings_.translation_noise_base =
       std::max(
-        0.0,
-        declare_parameter<double>("translation_noise_base", settings_.translation_noise_base));
+      0.0,
+      declare_parameter<double>("translation_noise_base", settings_.translation_noise_base));
     settings_.rotation_noise_from_rotation = std::max(
       0.0,
-      declare_parameter<double>("rotation_noise_from_rotation", settings_.rotation_noise_from_rotation));
+      declare_parameter<double>(
+        "rotation_noise_from_rotation",
+        settings_.rotation_noise_from_rotation));
     settings_.rotation_noise_from_translation = std::max(
       0.0,
       declare_parameter<double>(
         "rotation_noise_from_translation", settings_.rotation_noise_from_translation));
     settings_.rotation_noise_base =
-      std::max(0.0, declare_parameter<double>("rotation_noise_base", settings_.rotation_noise_base));
+      std::max(
+      0.0,
+      declare_parameter<double>("rotation_noise_base", settings_.rotation_noise_base));
 
     settings_.min_translation_for_update = std::max(
       0.0,
-      declare_parameter<double>("min_translation_for_update", settings_.min_translation_for_update));
+      declare_parameter<double>(
+        "min_translation_for_update",
+        settings_.min_translation_for_update));
     settings_.min_rotation_for_update =
       std::max(
-        0.0,
-        declare_parameter<double>("min_rotation_for_update", settings_.min_rotation_for_update));
+      0.0,
+      declare_parameter<double>("min_rotation_for_update", settings_.min_rotation_for_update));
 
     map_config_.resolution =
       std::max(0.001, declare_parameter<double>("map_resolution", map_config_.resolution));
     const int map_width = static_cast<int>(declare_parameter<int>("map_width", map_config_.width));
-    const int map_height = static_cast<int>(declare_parameter<int>("map_height", map_config_.height));
+    const int map_height =
+      static_cast<int>(declare_parameter<int>("map_height", map_config_.height));
     map_config_.width = std::max(1, map_width);
     map_config_.height = std::max(1, map_height);
   }
@@ -415,8 +430,10 @@ private:
 
     propagateParticles(last_accepted_odom_pose_, scan_odom_pose);
 
+    const std::vector<CachedScanBeam> scoring_beams = buildScoringBeams(*msg);
+
     if (anyParticleHasMap()) {
-      scoreParticles(*msg);
+      scoreParticles(scoring_beams);
     } else {
       const double equal_weight = 1.0 / static_cast<double>(particles_.size());
       for (auto & particle : particles_) {
@@ -425,6 +442,30 @@ private:
     }
 
     const std::size_t best_index = bestParticleIndex();
+    const ParticleStats normalized_stats = computeParticleStats();
+    const std::size_t previous_published_index = findParticleById(published_particle_id_);
+    const bool had_previous_published_particle =
+      previous_published_index < particles_.size() && particles_[previous_published_index].has_map;
+    const double previous_published_score =
+      had_previous_published_particle ? particles_[previous_published_index].weight : 0.0;
+    std::size_t published_index = selectPublishedParticleIndex(best_index);
+    const bool published_particle_changed =
+      had_previous_published_particle && previous_published_index != published_index;
+    const double published_score_improvement_pct =
+      (had_previous_published_particle && previous_published_score > 0.0) ?
+      ((particles_[published_index].weight / previous_published_score) - 1.0) * 100.0 :
+      std::numeric_limits<double>::quiet_NaN();
+    const std::size_t selected_published_particle_id = particles_[published_index].id;
+    const bool resampled = shouldResample(normalized_stats.effective_particle_count);
+    if (resampled) {
+      resampleParticles(selected_published_particle_id);
+      published_index = findParticleById(selected_published_particle_id);
+      if (published_index >= particles_.size()) {
+        published_index = bestParticleIndex();
+        published_particle_id_ = particles_[published_index].id;
+      }
+    }
+
     for (auto & particle : particles_) {
       Particle::TrajectoryPose trajectory_pose;
       trajectory_pose.pose = particle.pose;
@@ -436,25 +477,7 @@ private:
       particle.has_map = true;
     }
 
-    const ParticleStats normalized_stats = computeParticleStats();
-    const std::size_t previous_published_index = findParticleById(published_particle_id_);
-    const bool had_previous_published_particle =
-      previous_published_index < particles_.size() && particles_[previous_published_index].has_map;
-    const double previous_published_score =
-      had_previous_published_particle ? particles_[previous_published_index].weight : 0.0;
-    const std::size_t published_index = selectPublishedParticleIndex(best_index);
-    const bool published_particle_changed =
-      had_previous_published_particle && previous_published_index != published_index;
-    const double published_score_improvement_pct =
-      (had_previous_published_particle && previous_published_score > 0.0) ?
-      ((particles_[published_index].weight / previous_published_score) - 1.0) * 100.0 :
-      std::numeric_limits<double>::quiet_NaN();
     publishState(published_index, msg->header.stamp, scan_odom_pose);
-    const bool resampled = shouldResample(normalized_stats.effective_particle_count);
-    if (resampled) {
-      resampleParticles();
-    }
-
     last_accepted_odom_pose_ = scan_odom_pose;
 
     if (published_particle_changed) {
@@ -594,10 +617,46 @@ private:
     return std::any_of(
       particles_.begin(),
       particles_.end(),
-      [](const Particle & particle) { return particle.has_map; });
+      [](const Particle & particle) {return particle.has_map;});
   }
 
-  ParticleStats scoreParticles(const sensor_msgs::msg::LaserScan & scan)
+  std::vector<CachedScanBeam> buildScoringBeams(const sensor_msgs::msg::LaserScan & scan) const
+  {
+    std::vector<CachedScanBeam> beams;
+    beams.reserve((scan.ranges.size() + settings_.scan_beam_step - 1U) / settings_.scan_beam_step);
+
+    for (std::size_t i = 0; i < scan.ranges.size(); i += settings_.scan_beam_step) {
+      const float range = scan.ranges[i];
+      if (std::isnan(range) || range < scan.range_min) {
+        continue;
+      }
+
+      bool endpoint_is_hit = false;
+      double scoring_range = scan.range_max;
+      if (std::isfinite(range)) {
+        scoring_range = std::min(static_cast<double>(range), static_cast<double>(scan.range_max));
+        endpoint_is_hit = range < scan.range_max;
+      } else if (!std::isinf(range)) {
+        continue;
+      }
+
+      if (scoring_range <= scan.range_min) {
+        continue;
+      }
+
+      const double beam_angle = scan.angle_min + static_cast<double>(i) * scan.angle_increment;
+      beams.push_back(
+        CachedScanBeam{
+          scoring_range,
+          std::cos(beam_angle),
+          std::sin(beam_angle),
+          endpoint_is_hit});
+    }
+
+    return beams;
+  }
+
+  ParticleStats scoreParticles(const std::vector<CachedScanBeam> & scoring_beams)
   {
     ParticleStats stats;
     stats.raw_scores.resize(particles_.size(), 0.0);
@@ -614,45 +673,27 @@ private:
       }
 
       double log_likelihood = 0.0;
-      std::size_t used_beams = 0;
+      const double cos_theta = std::cos(particle.pose.theta);
+      const double sin_theta = std::sin(particle.pose.theta);
 
-      for (std::size_t i = 0; i < scan.ranges.size(); i += settings_.scan_beam_step) {
-        const float range = scan.ranges[i];
-        if (std::isnan(range) || range < scan.range_min) {
-          continue;
-        }
-
-        bool endpoint_is_hit = false;
-        double scoring_range = scan.range_max;
-        if (std::isfinite(range)) {
-          scoring_range = std::min(static_cast<double>(range), static_cast<double>(scan.range_max));
-          endpoint_is_hit = range < scan.range_max;
-        } else if (!std::isinf(range)) {
-          continue;
-        }
-
-        if (scoring_range <= scan.range_min) {
-          continue;
-        }
-
-        const double beam_angle = scan.angle_min + static_cast<double>(i) * scan.angle_increment;
-        const double world_angle = particle.pose.theta + beam_angle;
-        const double hit_x = particle.pose.x + scoring_range * std::cos(world_angle);
-        const double hit_y = particle.pose.y + scoring_range * std::sin(world_angle);
-        if (endpoint_is_hit) {
+      for (const auto & beam : scoring_beams) {
+        const double beam_world_cos = cos_theta * beam.cos_angle - sin_theta * beam.sin_angle;
+        const double beam_world_sin = sin_theta * beam.cos_angle + cos_theta * beam.sin_angle;
+        const double hit_x = particle.pose.x + beam.range * beam_world_cos;
+        const double hit_y = particle.pose.y + beam.range * beam_world_sin;
+        if (beam.endpoint_is_hit) {
           const double beam_score = particle.likelihood_field.valueAtWorld(hit_x, hit_y);
           log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
         }
         log_likelihood -= rayCrossingPenalty(
           particle.map_msg,
           particle.pose,
-          world_angle,
-          scoring_range,
-          endpoint_is_hit);
-        used_beams++;
+          hit_x,
+          hit_y,
+          beam.endpoint_is_hit);
       }
 
-      if (used_beams == 0U) {
+      if (scoring_beams.empty()) {
         log_likelihood = invalid_log_likelihood;
       }
 
@@ -740,8 +781,8 @@ private:
   double rayCrossingPenalty(
     const nav_msgs::msg::OccupancyGrid & map,
     const Pose2D & particle_pose,
-    double world_angle,
-    double range,
+    double end_x,
+    double end_y,
     bool endpoint_is_hit) const
   {
     if (map.data.empty()) {
@@ -754,8 +795,6 @@ private:
       return 0.0;
     }
 
-    const double end_x = particle_pose.x + range * std::cos(world_angle);
-    const double end_y = particle_pose.y + range * std::sin(world_angle);
     int end_cell_x = 0;
     int end_cell_y = 0;
     if (!worldToMapCell(map, end_x, end_y, end_cell_x, end_cell_y)) {
@@ -797,11 +836,11 @@ private:
   std::size_t bestParticleIndex() const
   {
     return static_cast<std::size_t>(std::distance(
-      particles_.begin(),
-      std::max_element(
-        particles_.begin(),
-        particles_.end(),
-        [](const Particle & lhs, const Particle & rhs) { return lhs.weight < rhs.weight; })));
+             particles_.begin(),
+             std::max_element(
+               particles_.begin(),
+               particles_.end(),
+               [](const Particle & lhs, const Particle & rhs) {return lhs.weight < rhs.weight;})));
   }
 
   std::size_t findParticleById(std::size_t id) const
@@ -809,7 +848,7 @@ private:
     const auto iterator = std::find_if(
       particles_.begin(),
       particles_.end(),
-      [id](const Particle & particle) { return particle.id == id; });
+      [id](const Particle & particle) {return particle.id == id;});
     if (iterator == particles_.end()) {
       return particles_.size();
     }
@@ -880,7 +919,7 @@ private:
     return effective_particle_count < (0.5 * static_cast<double>(particles_.size()));
   }
 
-  void resampleParticles()
+  void resampleParticles(std::size_t preserved_particle_id)
   {
     double weight_sum = 0.0;
     for (const auto & particle : particles_) {
@@ -912,6 +951,7 @@ private:
     std::vector<Particle> new_particles;
     new_particles.reserve(particles_.size());
     bool preserved_published_particle = false;
+    const std::size_t preserved_source_index = findParticleById(preserved_particle_id);
 
     double pointer = start_distribution(rng_);
     const double step = 1.0 / static_cast<double>(particles_.size());
@@ -923,7 +963,7 @@ private:
       }
 
       Particle copied = particles_[particle_index];
-      if (copied.id == published_particle_id_ && !preserved_published_particle) {
+      if (copied.id == preserved_particle_id && !preserved_published_particle) {
         preserved_published_particle = true;
       } else {
         copied.id = next_particle_id_++;
@@ -931,6 +971,12 @@ private:
       copied.weight = 1.0 / static_cast<double>(particles_.size());
       new_particles.push_back(std::move(copied));
       pointer += step;
+    }
+
+    if (!preserved_published_particle && preserved_source_index < particles_.size()) {
+      Particle copied = particles_[preserved_source_index];
+      copied.weight = 1.0 / static_cast<double>(particles_.size());
+      new_particles.back() = std::move(copied);
     }
 
     particles_ = std::move(new_particles);
