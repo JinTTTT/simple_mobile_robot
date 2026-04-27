@@ -4,6 +4,7 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterFile
 
 def generate_launch_description():
     """
@@ -31,8 +32,8 @@ def generate_launch_description():
         arguments=[
             # Command velocity: ROS 2 → Gazebo (control the robot)
             '/cmd_vel@geometry_msgs/msg/Twist@ignition.msgs.Twist',
-            # Odometry: Gazebo → ROS 2 (where is the robot?)
-            '/odom@nav_msgs/msg/Odometry@ignition.msgs.Odometry',
+            # Odometry: Gazebo → ROS 2 (perfect physics odometry, before noise injection)
+            '/odom_raw@nav_msgs/msg/Odometry@ignition.msgs.Odometry',
             # Transforms: Gazebo → ROS 2 (coordinate frames)
             '/tf@tf2_msgs/msg/TFMessage@ignition.msgs.Pose_V',
             # Lidar scan: Gazebo → ROS 2 (sensor data)
@@ -49,9 +50,22 @@ def generate_launch_description():
         output='screen'
     )
 
+    odometry_noise_node = Node(
+        package='simulation',
+        executable='odometry_noise_node',
+        output='screen',
+        parameters=[
+            ParameterFile(
+                os.path.join(pkg_path, 'config', 'odometry_noise.yaml'),
+                allow_substs=True
+            )
+        ]
+    )
+
     # 3. Return all launch actions
     return LaunchDescription([
-        spawn_robot_launch,  # Include the existing launch file
-        bridge,              # Add the bridge node
+        spawn_robot_launch,        # Start Gazebo and spawn the robot
+        bridge,                    # ROS 2 <-> Gazebo topic bridge
         ground_truth_pose_publisher,
+        odometry_noise_node,       # Injects realistic drift into /odom
     ])

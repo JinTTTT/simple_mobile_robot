@@ -35,16 +35,28 @@ ament_target_dependencies(ground_truth_pose_publisher
   nav_msgs
 )
 
+add_executable(odometry_noise_node
+  src/odometry_noise_node.cpp
+)
+
+ament_target_dependencies(odometry_noise_node
+  rclcpp
+  geometry_msgs
+  nav_msgs
+)
+
 install(TARGETS
   ground_truth_pose_publisher
+  odometry_noise_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY 
-  launch 
+install(DIRECTORY
+  launch
   urdf
   models
   worlds
+  config
   DESTINATION share/${PROJECT_NAME}
 )
 
