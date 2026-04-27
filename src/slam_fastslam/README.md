@@ -17,6 +17,12 @@ Run with:
 ros2 run slam_fastslam fastslam_node
 ```
 
+Or launch it with the package config file:
+
+```bash
+ros2 launch slam_fastslam fastslam.launch.py
+```
+
 ## Current Logic
 
 The node currently does this:
