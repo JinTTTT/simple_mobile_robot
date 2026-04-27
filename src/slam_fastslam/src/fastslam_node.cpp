@@ -47,7 +47,6 @@ struct Settings
   double ray_occupied_crossing_penalty{2.0};
   double ray_penalty_max_per_beam{6.0};
   std::size_t ray_endpoint_margin_cells{2};
-  double published_particle_switch_ratio{1.25};
   double translation_noise_from_translation{0.01};
   double translation_noise_base{0.001};
   double rotation_noise_from_rotation{0.02};
@@ -266,6 +265,7 @@ struct Particle
   std::size_t id{0};
   Pose2D pose{};
   double weight{0.0};
+  double log_likelihood{-std::numeric_limits<double>::infinity()};
   struct TrajectoryPose
   {
     Pose2D pose{};
@@ -337,6 +337,7 @@ private:
       std::max(
       0.01,
       declare_parameter<double>("likelihood_sigma", settings_.likelihood_sigma));
+
 
     settings_.translation_noise_from_translation = std::max(
       0.0,
@@ -484,26 +485,21 @@ private:
 
     const std::size_t best_index = bestParticleIndex();
     const ParticleStats normalized_stats = computeParticleStats();
-    const std::size_t previous_published_index = findParticleById(published_particle_id_);
-    const bool had_previous_published_particle =
-      previous_published_index < particles_.size() && particles_[previous_published_index].has_map;
-    const double previous_published_score =
-      had_previous_published_particle ? particles_[previous_published_index].weight : 0.0;
+
     std::size_t published_index = selectPublishedParticleIndex(best_index);
-    const bool published_particle_changed =
-      had_previous_published_particle && previous_published_index != published_index;
-    const double published_score_improvement_pct =
-      (had_previous_published_particle && previous_published_score > 0.0) ?
-      ((particles_[published_index].weight / previous_published_score) - 1.0) * 100.0 :
-      std::numeric_limits<double>::quiet_NaN();
-    const std::size_t selected_published_particle_id = particles_[published_index].id;
+
     const bool resampled = shouldResample(normalized_stats.effective_particle_count);
+    bool published_killed = false;
     if (resampled) {
-      resampleParticles(selected_published_particle_id);
-      published_index = findParticleById(selected_published_particle_id);
-      if (published_index >= particles_.size()) {
+      const std::size_t pre_resample_id = particles_[published_index].id;
+      resampleParticles(pre_resample_id);
+      const std::size_t post_resample_index = findParticleById(pre_resample_id);
+      if (post_resample_index >= particles_.size()) {
+        published_killed = true;
         published_index = bestParticleIndex();
         published_particle_id_ = particles_[published_index].id;
+      } else {
+        published_index = post_resample_index;
       }
     }
 
@@ -522,26 +518,15 @@ private:
     publishState(published_index, msg->header.stamp, scan_odom_pose);
     last_accepted_odom_pose_ = scan_odom_pose;
 
-    if (published_particle_changed) {
-      RCLCPP_INFO_THROTTLE(
-        get_logger(),
-        *get_clock(),
-        2000,
-        "N_eff=%.2f resampled=%s published_particle=%zu->%zu improvement=%+.1f%%",
-        normalized_stats.effective_particle_count,
-        resampled ? "yes" : "no",
-        previous_published_index,
-        published_index,
-        published_score_improvement_pct);
-    } else {
-      RCLCPP_INFO_THROTTLE(
-        get_logger(),
-        *get_clock(),
-        2000,
-        "N_eff=%.2f resampled=%s switched=no",
-        normalized_stats.effective_particle_count,
-        resampled ? "yes" : "no");
-    }
+    RCLCPP_INFO_THROTTLE(
+      get_logger(),
+      *get_clock(),
+      2000,
+      "N_eff=%.2f resampled=%s published=%zu%s",
+      normalized_stats.effective_particle_count,
+      resampled ? "yes" : "no",
+      published_index,
+      published_killed ? " [replaced by resampling]" : "");
   }
 
   bool shouldAcceptUpdate(const Pose2D & current_odom_pose) const
@@ -710,6 +695,7 @@ private:
       auto & particle = particles_[particle_index];
       if (!particle.has_map || !particle.likelihood_field.hasMap()) {
         particle.weight = 0.0;
+        particle.log_likelihood = invalid_log_likelihood;
         stats.raw_scores[particle_index] = invalid_log_likelihood;
         continue;
       }
@@ -749,6 +735,7 @@ private:
       }
 
       particle.weight = 0.0;
+      particle.log_likelihood = log_likelihood;
       stats.raw_scores[particle_index] = log_likelihood;
       if (std::isfinite(log_likelihood)) {
         max_log_likelihood = std::max(max_log_likelihood, log_likelihood);
@@ -914,18 +901,9 @@ private:
       return 0U;
     }
 
-    std::size_t current_index = findParticleById(published_particle_id_);
+    const std::size_t current_index = findParticleById(published_particle_id_);
     if (current_index >= particles_.size() || !particles_[current_index].has_map) {
       published_particle_id_ = particles_[best_index].id;
-      return best_index;
-    }
-
-    const Particle & current_particle = particles_[current_index];
-    const Particle & best_particle = particles_[best_index];
-    const double switch_threshold =
-      current_particle.weight * settings_.published_particle_switch_ratio;
-    if (best_index != current_index && best_particle.weight > switch_threshold) {
-      published_particle_id_ = best_particle.id;
       return best_index;
     }
 
@@ -1002,8 +980,7 @@ private:
 
     std::vector<Particle> new_particles;
     new_particles.reserve(particles_.size());
-    bool preserved_published_particle = false;
-    const std::size_t preserved_source_index = findParticleById(preserved_particle_id);
+    bool published_id_preserved = false;
 
     double pointer = start_distribution(rng_);
     const double step = 1.0 / static_cast<double>(particles_.size());
@@ -1015,20 +992,14 @@ private:
       }
 
       Particle copied = particles_[particle_index];
-      if (copied.id == preserved_particle_id && !preserved_published_particle) {
-        preserved_published_particle = true;
+      if (copied.id == preserved_particle_id && !published_id_preserved) {
+        published_id_preserved = true;
       } else {
         copied.id = next_particle_id_++;
       }
       copied.weight = 1.0 / static_cast<double>(particles_.size());
       new_particles.push_back(std::move(copied));
       pointer += step;
-    }
-
-    if (!preserved_published_particle && preserved_source_index < particles_.size()) {
-      Particle copied = particles_[preserved_source_index];
-      copied.weight = 1.0 / static_cast<double>(particles_.size());
-      new_particles.back() = std::move(copied);
     }
 
     particles_ = std::move(new_particles);
