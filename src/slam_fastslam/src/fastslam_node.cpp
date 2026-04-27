@@ -2,10 +2,8 @@
 #include <cmath>
 #include <cstddef>
 #include <deque>
-#include <iomanip>
 #include <functional>
 #include <limits>
-#include <sstream>
 #include <memory>
 #include <random>
 #include <string>
@@ -114,20 +112,6 @@ Pose2D odomMsgToPose(const nav_msgs::msg::Odometry & msg)
   double pitch = 0.0;
   tf2::Matrix3x3(quaternion).getRPY(roll, pitch, pose.theta);
   return pose;
-}
-
-std::string formatScoreList(const std::vector<double> & values)
-{
-  std::ostringstream stream;
-  stream << "[";
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    if (i > 0U) {
-      stream << ", ";
-    }
-    stream << std::fixed << std::setprecision(4) << values[i];
-  }
-  stream << "]";
-  return stream.str();
 }
 
 std::vector<GridCell> bresenhamLine(int x0, int y0, int x1, int y1)
@@ -383,18 +367,13 @@ private:
 
     propagateParticles(last_accepted_odom_pose_, scan_odom_pose);
 
-    ParticleStats particle_stats;
     if (anyParticleHasMap()) {
-      particle_stats = scoreParticles(*msg);
+      scoreParticles(*msg);
     } else {
       const double equal_weight = 1.0 / static_cast<double>(particles_.size());
       for (auto & particle : particles_) {
         particle.weight = equal_weight;
       }
-      particle_stats.raw_scores.assign(particles_.size(), 0.0);
-      particle_stats.normalized_scores.assign(
-        particles_.size(),
-        1.0 / static_cast<double>(particles_.size()));
     }
 
     const std::size_t best_index = bestParticleIndex();
@@ -410,43 +389,46 @@ private:
     }
 
     const ParticleStats normalized_stats = computeParticleStats();
+    const std::size_t previous_published_index = findParticleById(published_particle_id_);
+    const bool had_previous_published_particle =
+      previous_published_index < particles_.size() && particles_[previous_published_index].has_map;
+    const double previous_published_score =
+      had_previous_published_particle ? particles_[previous_published_index].weight : 0.0;
     const std::size_t published_index = selectPublishedParticleIndex(best_index);
-    const Pose2D published_pose = particles_[published_index].pose;
-    const std::size_t published_keyframe_count =
-      particles_[published_index].trajectory.size();
+    const bool published_particle_changed =
+      had_previous_published_particle && previous_published_index != published_index;
+    const double published_score_improvement_pct =
+      (had_previous_published_particle && previous_published_score > 0.0) ?
+      ((particles_[published_index].weight / previous_published_score) - 1.0) * 100.0 :
+      std::numeric_limits<double>::quiet_NaN();
     publishState(published_index, msg->header.stamp, scan_odom_pose);
     const bool resampled = shouldResample(normalized_stats.effective_particle_count);
     if (resampled) {
       resampleParticles();
     }
 
-    accepted_update_count_ += 1;
     last_accepted_odom_pose_ = scan_odom_pose;
 
-    RCLCPP_INFO_THROTTLE(
-      get_logger(),
-      *get_clock(),
-      2000,
-      "accepted_updates=%zu keyframes=%zu best_particle=%zu published_particle=%zu resampled=%s N_eff=%.2f best_score=%.4f avg_score=%.4f min_score=%.4f published_pose=(%.3f, %.3f, %.3f)",
-      accepted_update_count_,
-      published_keyframe_count,
-      best_index,
-      published_index,
-      resampled ? "yes" : "no",
-      normalized_stats.effective_particle_count,
-      normalized_stats.best_score,
-      normalized_stats.average_score,
-      normalized_stats.min_score,
-      published_pose.x,
-      published_pose.y,
-      published_pose.theta);
-    RCLCPP_INFO_THROTTLE(
-      get_logger(),
-      *get_clock(),
-      2000,
-      "log_likelihoods=%s normalized_weights=%s",
-      formatScoreList(particle_stats.raw_scores).c_str(),
-      formatScoreList(normalized_stats.normalized_scores).c_str());
+    if (published_particle_changed) {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        2000,
+        "N_eff=%.2f resampled=%s published_particle=%zu->%zu improvement=%+.1f%%",
+        normalized_stats.effective_particle_count,
+        resampled ? "yes" : "no",
+        previous_published_index,
+        published_index,
+        published_score_improvement_pct);
+    } else {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        2000,
+        "N_eff=%.2f resampled=%s switched=no",
+        normalized_stats.effective_particle_count,
+        resampled ? "yes" : "no");
+    }
   }
 
   bool shouldAcceptUpdate(const Pose2D & current_odom_pose) const
@@ -998,8 +980,6 @@ private:
   Pose2D last_accepted_odom_pose_{};
   bool have_odom_{false};
   bool have_last_accepted_odom_{false};
-  std::size_t accepted_update_count_{0};
-
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_pub_;
