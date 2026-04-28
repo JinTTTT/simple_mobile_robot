@@ -25,3 +25,5 @@ fastslam_node:
 
     consecutive_wins_to_switch: 3
     switch_weight_ratio: 2.0
+
+    freed_cells_rebuild_threshold: 5

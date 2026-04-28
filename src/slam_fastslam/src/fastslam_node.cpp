@@ -60,6 +60,7 @@ struct Settings
   std::size_t traj_max_poses{500};
   int consecutive_wins_to_switch{3};
   double switch_weight_ratio{2.0};
+  std::size_t freed_cells_rebuild_threshold{5};
 };
 
 struct ParticleStats
@@ -176,6 +177,7 @@ public:
     const int total_cells = width * height;
     if (total_cells <= 0 || max_distance_m <= 0.0) {
       field_map_.data.clear();
+      distance_cells_.clear();
       return;
     }
 
@@ -232,6 +234,99 @@ public:
       field_map_.data[static_cast<std::size_t>(i)] =
         static_cast<int8_t>(std::round(likelihood * 100.0));
     }
+
+    // Persist the distance field so incremental updates can reuse it.
+    width_ = width;
+    height_ = height;
+    max_distance_cells_ = max_distance_cells;
+    resolution_ = resolution;
+    two_sigma_sq_ = two_sigma_sq;
+    distance_cells_ = std::move(distance_to_wall);
+  }
+
+  // Update only the cells reachable from newly occupied cells via BFS.
+  // Falls back to a full build on first call, dimension change, or when the
+  // number of freed cells exceeds the noise threshold (genuine structural change).
+  // A small number of freed cells is treated as sensor noise and ignored —
+  // the field stays slightly stale for one scan, which is acceptable.
+  void incrementalUpdate(
+    const nav_msgs::msg::OccupancyGrid & map,
+    double max_distance_m,
+    double sigma_m,
+    const std::vector<int> & newly_occupied,
+    const std::vector<int> & newly_freed,
+    std::size_t freed_cells_rebuild_threshold)
+  {
+    const int new_width = static_cast<int>(map.info.width);
+    const int new_height = static_cast<int>(map.info.height);
+    const int new_max_dist =
+      static_cast<int>(std::ceil(max_distance_m / map.info.resolution));
+
+    const bool dimensions_changed =
+      (new_width != width_ || new_height != height_ || new_max_dist != max_distance_cells_);
+
+    const bool freed_cells_significant =
+      newly_freed.size() > freed_cells_rebuild_threshold;
+
+    if (distance_cells_.empty() || dimensions_changed || freed_cells_significant) {
+      build(map, max_distance_m, sigma_m);
+      return;
+    }
+
+    if (newly_occupied.empty()) {
+      return;
+    }
+
+    // BFS from every newly occupied cell, relaxing distances outward.
+    std::vector<int> queue;
+    queue.reserve(newly_occupied.size() * 64);
+
+    for (const int idx : newly_occupied) {
+      if (idx < 0 || idx >= static_cast<int>(distance_cells_.size())) {
+        continue;
+      }
+      if (distance_cells_[static_cast<std::size_t>(idx)] > 0) {
+        distance_cells_[static_cast<std::size_t>(idx)] = 0;
+        field_map_.data[static_cast<std::size_t>(idx)] = 100;
+        queue.push_back(idx);
+      }
+    }
+
+    const int offsets[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+    for (std::size_t head = 0; head < queue.size(); ++head) {
+      const int current = queue[head];
+      const int current_dist = distance_cells_[static_cast<std::size_t>(current)];
+      const int next_dist = current_dist + 1;
+
+      if (next_dist > max_distance_cells_) {
+        continue;
+      }
+
+      const int row = current / width_;
+      const int col = current % width_;
+
+      for (const auto & offset : offsets) {
+        const int next_col = col + offset[0];
+        const int next_row = row + offset[1];
+
+        if (next_col < 0 || next_row < 0 || next_col >= width_ || next_row >= height_) {
+          continue;
+        }
+
+        const int next_idx = next_row * width_ + next_col;
+        if (next_dist >= distance_cells_[static_cast<std::size_t>(next_idx)]) {
+          continue;
+        }
+
+        distance_cells_[static_cast<std::size_t>(next_idx)] = next_dist;
+        const double distance_m = next_dist * resolution_;
+        const double likelihood = std::exp(-(distance_m * distance_m) / two_sigma_sq_);
+        field_map_.data[static_cast<std::size_t>(next_idx)] =
+          static_cast<int8_t>(std::round(likelihood * 100.0));
+        queue.push_back(next_idx);
+      }
+    }
   }
 
   bool hasMap() const
@@ -264,6 +359,12 @@ public:
 
 private:
   nav_msgs::msg::OccupancyGrid field_map_{};
+  std::vector<int> distance_cells_{};
+  int width_{0};
+  int height_{0};
+  int max_distance_cells_{0};
+  double resolution_{0.0};
+  double two_sigma_sq_{0.0};
 };
 
 struct Particle
@@ -398,6 +499,13 @@ private:
     settings_.switch_weight_ratio = std::max(
       1.0,
       declare_parameter<double>("switch_weight_ratio", settings_.switch_weight_ratio));
+
+    const int freed_cells_rebuild_threshold = static_cast<int>(
+      declare_parameter<int>(
+        "freed_cells_rebuild_threshold",
+        static_cast<int>(settings_.freed_cells_rebuild_threshold)));
+    settings_.freed_cells_rebuild_threshold =
+      static_cast<std::size_t>(std::max(0, freed_cells_rebuild_threshold));
 
     const int traj_max_poses = static_cast<int>(
       declare_parameter<int>("traj_max_poses", static_cast<int>(settings_.traj_max_poses)));
@@ -550,9 +658,15 @@ private:
         particle.pose.y + laser_offset_.x * sin_p + laser_offset_.y * cos_p;
       const double map_laser_theta = particle.pose.theta + laser_offset_.theta;
       particle.mapper.updateWithScan(*msg, map_laser_x, map_laser_y, map_laser_theta);
+
+      std::vector<int> newly_occupied;
+      std::vector<int> newly_freed;
+      particle.mapper.getAndClearChanges(newly_occupied, newly_freed);
+
       particle.map_msg = particle.mapper.buildOccupancyGridMsg("map", msg->header.stamp);
-      particle.likelihood_field.build(
-        particle.map_msg, settings_.likelihood_max_distance, settings_.likelihood_sigma);
+      particle.likelihood_field.incrementalUpdate(
+        particle.map_msg, settings_.likelihood_max_distance, settings_.likelihood_sigma,
+        newly_occupied, newly_freed, settings_.freed_cells_rebuild_threshold);
       particle.has_map = true;
     }
 

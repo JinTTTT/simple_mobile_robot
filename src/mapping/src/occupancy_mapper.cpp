@@ -19,6 +19,31 @@ void OccupancyMapper::configure(const Config & config)
 void OccupancyMapper::clear()
 {
   map_log_odds_.assign(config_.width * config_.height, 0.0);
+  newly_occupied_.clear();
+  newly_freed_.clear();
+}
+
+void OccupancyMapper::updateCell(int index, double delta)
+{
+  const bool was_occupied = map_log_odds_[index] > 0.0;
+  map_log_odds_[index] =
+    clamp(map_log_odds_[index] + delta, config_.log_odds_min, config_.log_odds_max);
+  const bool is_occupied = map_log_odds_[index] > 0.0;
+  if (!was_occupied && is_occupied) {
+    newly_occupied_.push_back(index);
+  } else if (was_occupied && !is_occupied) {
+    newly_freed_.push_back(index);
+  }
+}
+
+void OccupancyMapper::getAndClearChanges(
+  std::vector<int> & newly_occupied,
+  std::vector<int> & newly_freed)
+{
+  newly_occupied = std::move(newly_occupied_);
+  newly_freed = std::move(newly_freed_);
+  newly_occupied_.clear();
+  newly_freed_.clear();
 }
 
 bool OccupancyMapper::worldToGrid(double wx, double wy, int & gx, int & gy) const
@@ -98,19 +123,11 @@ void OccupancyMapper::updateWithScanData(
 
     const std::size_t free_cell_count = endpoint_is_hit ? cells.size() - 1U : cells.size();
     for (std::size_t j = 0; j < free_cell_count; ++j) {
-      const int index = gridToIndex(cells[j].first, cells[j].second);
-      map_log_odds_[index] = clamp(
-        map_log_odds_[index] + log_odds_pass_,
-        config_.log_odds_min,
-        config_.log_odds_max);
+      updateCell(gridToIndex(cells[j].first, cells[j].second), log_odds_pass_);
     }
 
     if (endpoint_is_hit) {
-      const int hit_index = gridToIndex(cells.back().first, cells.back().second);
-      map_log_odds_[hit_index] = clamp(
-        map_log_odds_[hit_index] + log_odds_hit_,
-        config_.log_odds_min,
-        config_.log_odds_max);
+      updateCell(gridToIndex(cells.back().first, cells.back().second), log_odds_hit_);
     }
   }
 }
