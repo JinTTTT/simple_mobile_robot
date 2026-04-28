@@ -68,6 +68,7 @@ void addObstacle(OccupancyMapper & mapper, double robot_x, double robot_y, doubl
 
 TEST(ScanScorerTest, BuildScoringBeamsFiltersInvalidRanges)
 {
+  // Beam preprocessing should drop bad ranges and keep only usable scoring beams.
   slam_fastslam::ScanScorerOptions options;
   options.scan_beam_step = 1U;
   const slam_fastslam::ScanScorer scorer(options);
@@ -91,6 +92,7 @@ TEST(ScanScorerTest, BuildScoringBeamsFiltersInvalidRanges)
 
 TEST(ScanScorerTest, EmptyScoringBeamsReturnNegativeInfinity)
 {
+  // Without any usable beams, scoring should return the lowest possible value.
   const slam_fastslam::ScanScorer scorer;
   const OccupancyMapper mapper = makeMapper();
   const slam_fastslam::LikelihoodField field;
@@ -107,6 +109,7 @@ TEST(ScanScorerTest, EmptyScoringBeamsReturnNegativeInfinity)
 
 TEST(ScanScorerTest, HitEndpointScoresHigherWhenAlignedWithObstacle)
 {
+  // A scan endpoint that lands on an obstacle should score better than a shifted pose.
   OccupancyMapper mapper = makeMapper();
   addObstacle(mapper, 3.5, 2.5, 1.0);
   const slam_fastslam::LikelihoodField field = buildField(mapper);
@@ -134,6 +137,7 @@ TEST(ScanScorerTest, HitEndpointScoresHigherWhenAlignedWithObstacle)
 
 TEST(ScanScorerTest, RayCrossingPenaltyLowersScore)
 {
+  // Rays that cross occupied cells before the endpoint should be penalized.
   OccupancyMapper endpoint_only_mapper = makeMapper();
   addObstacle(endpoint_only_mapper, 6.5, 2.5, 1.0);
   const slam_fastslam::LikelihoodField endpoint_only_field = buildField(endpoint_only_mapper);

@@ -36,6 +36,7 @@ std::vector<slam_fastslam::FastSlamParticle> makeParticles(
 
 TEST(ParticleResamplerTest, ShouldNotResampleForInvalidOrZeroEffectiveParticleCount)
 {
+  // N_eff must be positive and finite before the resampler considers acting.
   const slam_fastslam::ParticleResampler resampler;
 
   EXPECT_FALSE(resampler.shouldResample(0.0, 10U, 0.5));
@@ -50,6 +51,7 @@ TEST(ParticleResamplerTest, ShouldNotResampleForInvalidOrZeroEffectiveParticleCo
 
 TEST(ParticleResamplerTest, ShouldResampleOnlyBelowThreshold)
 {
+  // Resampling starts only when N_eff drops below the configured ratio.
   const slam_fastslam::ParticleResampler resampler;
 
   EXPECT_TRUE(resampler.shouldResample(2.9, 10U, 0.3));
@@ -59,6 +61,7 @@ TEST(ParticleResamplerTest, ShouldResampleOnlyBelowThreshold)
 
 TEST(ParticleResamplerTest, EqualWeightsKeepParticleCountAndOutputUniformWeights)
 {
+  // Uniform weights should stay uniform after systematic resampling.
   slam_fastslam::ParticleResampler resampler;
   auto particles = makeParticles({0.25, 0.25, 0.25, 0.25});
   std::default_random_engine rng(7U);
@@ -74,6 +77,7 @@ TEST(ParticleResamplerTest, EqualWeightsKeepParticleCountAndOutputUniformWeights
 
 TEST(ParticleResamplerTest, DegenerateWeightsResetToUniformWithoutCrashing)
 {
+  // Invalid or zero total weight must fall back to a safe uniform distribution.
   slam_fastslam::ParticleResampler resampler;
   auto particles = makeParticles(
   {
@@ -95,6 +99,7 @@ TEST(ParticleResamplerTest, DegenerateWeightsResetToUniformWithoutCrashing)
 
 TEST(ParticleResamplerTest, DominantParticleIsCopiedMoreOften)
 {
+  // A strongly weighted particle should appear multiple times after resampling.
   slam_fastslam::ParticleResampler resampler;
   auto particles = makeParticles({0.9, 0.05, 0.05});
   std::default_random_engine rng(23U);

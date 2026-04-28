@@ -97,6 +97,14 @@ if(BUILD_TESTING)
   target_link_libraries(test_scan_scorer
     slam_fastslam_core
   )
+
+  ament_add_gtest(test_fastslam
+    test/test_fastslam.cpp
+  )
+
+  target_link_libraries(test_fastslam
+    slam_fastslam_core
+  )
 endif()
 
 install(TARGETS

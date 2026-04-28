@@ -58,6 +58,7 @@ void clearMapperChanges(OccupancyMapper & mapper)
 
 TEST(LikelihoodFieldTest, IncrementalOccupiedUpdateIncreasesLikelihoodNearNewObstacle)
 {
+  // Adding a new occupied cell should raise likelihood nearby without drifting elsewhere.
   OccupancyMapper mapper = makeMapper();
   slam_fastslam::LikelihoodField field;
 
@@ -95,6 +96,7 @@ TEST(LikelihoodFieldTest, IncrementalOccupiedUpdateIncreasesLikelihoodNearNewObs
 
 TEST(LikelihoodFieldTest, IncrementalUpdateRebuildsWhenObstacleIsFreed)
 {
+  // Freed cells should force a full rebuild, and the result should match a fresh field.
   OccupancyMapper mapper = makeMapper();
   slam_fastslam::LikelihoodField field;
 
