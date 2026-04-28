@@ -535,7 +535,14 @@ private:
       if (particle.trajectory.size() > settings_.traj_max_poses) {
         particle.trajectory.erase(particle.trajectory.begin());
       }
-      particle.mapper.updateWithScan(*msg, particle.pose.x, particle.pose.y, particle.pose.theta);
+      const double cos_p = std::cos(particle.pose.theta);
+      const double sin_p = std::sin(particle.pose.theta);
+      const double map_laser_x =
+        particle.pose.x + laser_offset_.x * cos_p - laser_offset_.y * sin_p;
+      const double map_laser_y =
+        particle.pose.y + laser_offset_.x * sin_p + laser_offset_.y * cos_p;
+      const double map_laser_theta = particle.pose.theta + laser_offset_.theta;
+      particle.mapper.updateWithScan(*msg, map_laser_x, map_laser_y, map_laser_theta);
       particle.map_msg = particle.mapper.buildOccupancyGridMsg("map", msg->header.stamp);
       particle.likelihood_field.build(
         particle.map_msg, settings_.likelihood_max_distance, settings_.likelihood_sigma);
