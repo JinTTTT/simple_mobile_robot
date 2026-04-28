@@ -56,15 +56,27 @@ public:
     const std::string & frame_id,
     const builtin_interfaces::msg::Time & stamp) const;
 
+  // Retrieve cells that crossed the occupancy threshold since the last call,
+  // then clear the internal lists.
+  void getAndClearChanges(
+    std::vector<int> & newly_occupied,
+    std::vector<int> & newly_freed);
+
+  const Config & getConfig() const;
+  const std::vector<double> & getLogOdds() const;
+
 private:
   std::vector<std::pair<int, int>> bresenhamLine(int x0, int y0, int x1, int y1) const;
   int gridToIndex(int x, int y) const;
   double clamp(double value, double low, double high) const;
+  void updateCell(int index, double delta);
 
   Config config_;
   double log_odds_hit_ = 0.0;
   double log_odds_pass_ = 0.0;
   std::vector<double> map_log_odds_;
+  std::vector<int> newly_occupied_;
+  std::vector<int> newly_freed_;
 };
 
 #endif  // MAPPING__OCCUPANCY_MAPPER_HPP_

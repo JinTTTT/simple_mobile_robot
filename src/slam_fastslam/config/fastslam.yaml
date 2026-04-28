@@ -22,3 +22,8 @@ fastslam_node:
 
     free_space_reward_per_cell: 0.01
     traj_max_poses: 500
+
+    consecutive_wins_to_switch: 3
+    switch_weight_ratio: 2.0
+
+    freed_cells_rebuild_threshold: 5
