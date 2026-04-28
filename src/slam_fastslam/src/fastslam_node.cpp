@@ -58,6 +58,8 @@ struct Settings
   double resample_min_eff_ratio{0.3};
   double free_space_reward_per_cell{0.01};
   std::size_t traj_max_poses{500};
+  int consecutive_wins_to_switch{3};
+  double switch_weight_ratio{2.0};
 };
 
 struct ParticleStats
@@ -389,6 +391,14 @@ private:
       declare_parameter<double>(
         "free_space_reward_per_cell", settings_.free_space_reward_per_cell));
 
+    settings_.consecutive_wins_to_switch = std::max(
+      1,
+      static_cast<int>(
+        declare_parameter<int>("consecutive_wins_to_switch", settings_.consecutive_wins_to_switch)));
+    settings_.switch_weight_ratio = std::max(
+      1.0,
+      declare_parameter<double>("switch_weight_ratio", settings_.switch_weight_ratio));
+
     const int traj_max_poses = static_cast<int>(
       declare_parameter<int>("traj_max_poses", static_cast<int>(settings_.traj_max_poses)));
     settings_.traj_max_poses = static_cast<std::size_t>(std::max(1, traj_max_poses));
@@ -510,21 +520,18 @@ private:
     const double best_log_ll = particles_[best_index].log_likelihood;
     const ParticleStats normalized_stats = computeParticleStats();
 
+    const std::size_t pre_select_id = published_particle_id_;
     std::size_t published_index = selectPublishedParticleIndex(best_index);
+    const bool particle_switched = (published_particle_id_ != pre_select_id);
 
     const bool resampled = shouldResample(normalized_stats.effective_particle_count);
-    bool published_killed = false;
     if (resampled) {
       const std::size_t pre_resample_id = particles_[published_index].id;
       resampleParticles(pre_resample_id);
       const std::size_t post_resample_index = findParticleById(pre_resample_id);
-      if (post_resample_index >= particles_.size()) {
-        published_killed = true;
-        published_index = bestParticleIndex();
-        published_particle_id_ = particles_[published_index].id;
-      } else {
-        published_index = post_resample_index;
-      }
+      published_index =
+        (post_resample_index < particles_.size()) ? post_resample_index : bestParticleIndex();
+      published_particle_id_ = particles_[published_index].id;
     }
 
     for (auto & particle : particles_) {
@@ -556,13 +563,13 @@ private:
       get_logger(),
       *get_clock(),
       2000,
-      "N_eff=%.1f best_w=%.2f best_ll=%.1f resampled=%s published=%zu%s",
+      "N_eff=%.1f best_w=%.2f best_ll=%.1f resampled=%s particle_switched=%s published=%zu",
       normalized_stats.effective_particle_count,
       best_weight,
       best_log_ll,
       resampled ? "yes" : "no",
-      published_index,
-      published_killed ? " [replaced by resampling]" : "");
+      particle_switched ? "yes" : "no",
+      published_index);
   }
 
   bool shouldAcceptUpdate(const Pose2D & current_odom_pose) const
@@ -986,6 +993,42 @@ private:
     const std::size_t current_index = findParticleById(published_particle_id_);
     if (current_index >= particles_.size() || !particles_[current_index].has_map) {
       published_particle_id_ = particles_[best_index].id;
+      leading_particle_id_ = kInvalidParticleId;
+      leading_wins_ = 0;
+      return best_index;
+    }
+
+    // Published particle is still best — reset the challenger streak.
+    if (best_index == current_index) {
+      leading_particle_id_ = kInvalidParticleId;
+      leading_wins_ = 0;
+      return current_index;
+    }
+
+    // A different particle is ahead — track its consecutive-win streak.
+    const std::size_t best_id = particles_[best_index].id;
+    if (best_id == leading_particle_id_) {
+      ++leading_wins_;
+    } else {
+      leading_particle_id_ = best_id;
+      leading_wins_ = 1;
+    }
+
+    // Switch only when streak AND weight-ratio thresholds are both met.
+    const double published_weight = particles_[current_index].weight;
+    const double best_weight = particles_[best_index].weight;
+    if (leading_wins_ >= settings_.consecutive_wins_to_switch &&
+      best_weight >= settings_.switch_weight_ratio * published_weight)
+    {
+      RCLCPP_INFO(
+        get_logger(),
+        "Switching published particle: %zu -> %zu (streak=%d, weight ratio=%.2f)",
+        published_particle_id_, best_id,
+        leading_wins_,
+        published_weight > 0.0 ? best_weight / published_weight : 0.0);
+      published_particle_id_ = best_id;
+      leading_particle_id_ = kInvalidParticleId;
+      leading_wins_ = 0;
       return best_index;
     }
 
@@ -1175,6 +1218,8 @@ private:
   std::vector<Particle> particles_{};
   std::size_t next_particle_id_{0U};
   std::size_t published_particle_id_{kInvalidParticleId};
+  std::size_t leading_particle_id_{kInvalidParticleId};
+  int leading_wins_{0};
 
   std::deque<OdomSample> odom_buffer_{};
   Pose2D last_accepted_odom_pose_{};
