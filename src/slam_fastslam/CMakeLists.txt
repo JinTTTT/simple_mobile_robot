@@ -18,6 +18,7 @@ find_package(tf2_ros REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(ament_cmake_gtest REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
@@ -71,6 +72,32 @@ ament_target_dependencies(fastslam_node
 target_link_libraries(fastslam_node
   slam_fastslam_core
 )
+
+if(BUILD_TESTING)
+  ament_add_gtest(test_particle_resampler
+    test/test_particle_resampler.cpp
+  )
+
+  target_link_libraries(test_particle_resampler
+    slam_fastslam_core
+  )
+
+  ament_add_gtest(test_likelihood_field
+    test/test_likelihood_field.cpp
+  )
+
+  target_link_libraries(test_likelihood_field
+    slam_fastslam_core
+  )
+
+  ament_add_gtest(test_scan_scorer
+    test/test_scan_scorer.cpp
+  )
+
+  target_link_libraries(test_scan_scorer
+    slam_fastslam_core
+  )
+endif()
 
 install(TARGETS
   slam_fastslam_core
