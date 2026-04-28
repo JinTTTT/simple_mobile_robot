@@ -9,17 +9,12 @@
 #include "builtin_interfaces/msg/time.hpp"
 #include "mapping/occupancy_mapper.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "slam_fastslam/fastslam_types.hpp"
 #include "slam_fastslam/likelihood_field.hpp"
+#include "slam_fastslam/scan_scorer.hpp"
 
 namespace slam_fastslam
 {
-
-struct Pose2D
-{
-  double x{0.0};
-  double y{0.0};
-  double theta{0.0};
-};
 
 struct FastSlamParameters
 {
@@ -108,31 +103,9 @@ public:
   const std::vector<FastSlamParticle> & particles() const;
 
 private:
-  struct CachedScanBeam
-  {
-    double range{0.0};
-    double cos_angle{1.0};
-    double sin_angle{0.0};
-    bool endpoint_is_hit{false};
-  };
-
   void initializeParticles();
   void propagateParticles(const Pose2D & old_pose, const Pose2D & new_pose);
-  std::vector<CachedScanBeam> buildScoringBeams(const sensor_msgs::msg::LaserScan & scan) const;
   FastSlamParticleStats scoreParticles(const std::vector<CachedScanBeam> & scoring_beams);
-  double rayCrossingPenalty(
-    const OccupancyMapper & mapper,
-    double start_x,
-    double start_y,
-    double end_x,
-    double end_y,
-    bool endpoint_is_hit) const;
-  double freeSpaceBeamReward(
-    const OccupancyMapper & mapper,
-    double start_x,
-    double start_y,
-    double beam_world_cos,
-    double beam_world_sin) const;
   std::size_t bestParticleIndex() const;
   std::size_t findParticleById(std::size_t id) const;
   std::size_t selectPublishedParticleIndex(std::size_t best_index);
@@ -145,6 +118,7 @@ private:
 
   OccupancyMapper::Config map_config_{};
   Pose2D laser_offset_{};
+  ScanScorer scan_scorer_{};
   std::vector<FastSlamParticle> particles_{};
   std::size_t next_particle_id_{0U};
   std::size_t published_particle_id_{kInvalidParticleId};
