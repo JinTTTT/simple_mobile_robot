@@ -25,6 +25,7 @@ endif()
 
 add_library(slam_fastslam_core
   src/fastslam.cpp
+  src/likelihood_field.cpp
 )
 
 target_include_directories(slam_fastslam_core PUBLIC
