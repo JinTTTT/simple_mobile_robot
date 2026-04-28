@@ -62,6 +62,9 @@ public:
     std::vector<int> & newly_occupied,
     std::vector<int> & newly_freed);
 
+  const Config & getConfig() const;
+  const std::vector<double> & getLogOdds() const;
+
 private:
   std::vector<std::pair<int, int>> bresenhamLine(int x0, int y0, int x1, int y1) const;
   int gridToIndex(int x, int y) const;

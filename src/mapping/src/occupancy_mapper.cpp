@@ -46,6 +46,16 @@ void OccupancyMapper::getAndClearChanges(
   newly_freed_.clear();
 }
 
+const OccupancyMapper::Config & OccupancyMapper::getConfig() const
+{
+  return config_;
+}
+
+const std::vector<double> & OccupancyMapper::getLogOdds() const
+{
+  return map_log_odds_;
+}
+
 bool OccupancyMapper::worldToGrid(double wx, double wy, int & gx, int & gy) const
 {
   gx = static_cast<int>(std::floor((wx - config_.origin_x) / config_.resolution));

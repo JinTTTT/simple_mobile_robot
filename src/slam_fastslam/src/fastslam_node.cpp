@@ -168,12 +168,11 @@ std::vector<GridCell> bresenhamLine(int x0, int y0, int x1, int y1)
 class LikelihoodField
 {
 public:
-  void build(const nav_msgs::msg::OccupancyGrid & map, double max_distance_m, double sigma_m)
+  void build(const OccupancyMapper & mapper, double max_distance_m, double sigma_m)
   {
-    field_map_ = map;
-
-    const int width = static_cast<int>(map.info.width);
-    const int height = static_cast<int>(map.info.height);
+    const auto & cfg = mapper.getConfig();
+    const int width = cfg.width;
+    const int height = cfg.height;
     const int total_cells = width * height;
     if (total_cells <= 0 || max_distance_m <= 0.0) {
       field_map_.data.clear();
@@ -181,16 +180,25 @@ public:
       return;
     }
 
-    const double resolution = map.info.resolution;
+    const double resolution = cfg.resolution;
     const int max_distance_cells = static_cast<int>(std::ceil(max_distance_m / resolution));
+
+    // Populate field_map_ metadata so valueAtWorld() can use it.
+    field_map_.info.resolution = cfg.resolution;
+    field_map_.info.width = static_cast<std::uint32_t>(width);
+    field_map_.info.height = static_cast<std::uint32_t>(height);
+    field_map_.info.origin.position.x = cfg.origin_x;
+    field_map_.info.origin.position.y = cfg.origin_y;
+    field_map_.info.origin.orientation.w = 1.0;
 
     std::vector<int> distance_to_wall(static_cast<std::size_t>(total_cells), max_distance_cells);
     std::vector<int> queue(static_cast<std::size_t>(total_cells), 0);
     int queue_head = 0;
     int queue_tail = 0;
 
+    const auto & log_odds = mapper.getLogOdds();
     for (int i = 0; i < total_cells; ++i) {
-      if (map.data[static_cast<std::size_t>(i)] > 50) {
+      if (log_odds[static_cast<std::size_t>(i)] > 0.0) {
         distance_to_wall[static_cast<std::size_t>(i)] = 0;
         queue[static_cast<std::size_t>(queue_tail++)] = i;
       }
@@ -250,17 +258,18 @@ public:
   // A small number of freed cells is treated as sensor noise and ignored —
   // the field stays slightly stale for one scan, which is acceptable.
   void incrementalUpdate(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const OccupancyMapper & mapper,
     double max_distance_m,
     double sigma_m,
     const std::vector<int> & newly_occupied,
     const std::vector<int> & newly_freed,
     std::size_t freed_cells_rebuild_threshold)
   {
-    const int new_width = static_cast<int>(map.info.width);
-    const int new_height = static_cast<int>(map.info.height);
+    const auto & cfg = mapper.getConfig();
+    const int new_width = cfg.width;
+    const int new_height = cfg.height;
     const int new_max_dist =
-      static_cast<int>(std::ceil(max_distance_m / map.info.resolution));
+      static_cast<int>(std::ceil(max_distance_m / cfg.resolution));
 
     const bool dimensions_changed =
       (new_width != width_ || new_height != height_ || new_max_dist != max_distance_cells_);
@@ -269,7 +278,7 @@ public:
       newly_freed.size() > freed_cells_rebuild_threshold;
 
     if (distance_cells_.empty() || dimensions_changed || freed_cells_significant) {
-      build(map, max_distance_m, sigma_m);
+      build(mapper, max_distance_m, sigma_m);
       return;
     }
 
@@ -378,9 +387,8 @@ struct Particle
     Pose2D pose{};
     builtin_interfaces::msg::Time stamp{};
   };
-  std::vector<TrajectoryPose> trajectory{};
+  std::deque<TrajectoryPose> trajectory{};
   OccupancyMapper mapper{};
-  nav_msgs::msg::OccupancyGrid map_msg{};
   LikelihoodField likelihood_field{};
   bool has_map{false};
 };
@@ -532,7 +540,6 @@ private:
       particle.weight = initial_weight;
       particle.trajectory.clear();
       particle.mapper.configure(map_config_);
-      particle.map_msg = nav_msgs::msg::OccupancyGrid{};
       particle.has_map = false;
     }
   }
@@ -614,19 +621,21 @@ private:
 
     const std::vector<CachedScanBeam> scoring_beams = buildScoringBeams(*msg);
 
-    if (anyParticleHasMap()) {
-      scoreParticles(scoring_beams);
+    ParticleStats normalized_stats;
+    if (all_particles_have_map_) {
+      normalized_stats = scoreParticles(scoring_beams);
     } else {
       const double equal_weight = 1.0 / static_cast<double>(particles_.size());
       for (auto & particle : particles_) {
         particle.weight = equal_weight;
       }
+      normalized_stats.effective_particle_count =
+        static_cast<double>(particles_.size());
     }
 
     const std::size_t best_index = bestParticleIndex();
     const double best_weight = particles_[best_index].weight;
     const double best_log_ll = particles_[best_index].log_likelihood;
-    const ParticleStats normalized_stats = computeParticleStats();
 
     const std::size_t pre_select_id = published_particle_id_;
     std::size_t published_index = selectPublishedParticleIndex(best_index);
@@ -642,14 +651,18 @@ private:
       published_particle_id_ = particles_[published_index].id;
     }
 
+    std::vector<int> newly_occupied;
+    std::vector<int> newly_freed;
+
     for (auto & particle : particles_) {
       Particle::TrajectoryPose trajectory_pose;
       trajectory_pose.pose = particle.pose;
       trajectory_pose.stamp = msg->header.stamp;
       particle.trajectory.push_back(trajectory_pose);
       if (particle.trajectory.size() > settings_.traj_max_poses) {
-        particle.trajectory.erase(particle.trajectory.begin());
+        particle.trajectory.pop_front();
       }
+
       const double cos_p = std::cos(particle.pose.theta);
       const double sin_p = std::sin(particle.pose.theta);
       const double map_laser_x =
@@ -659,16 +672,14 @@ private:
       const double map_laser_theta = particle.pose.theta + laser_offset_.theta;
       particle.mapper.updateWithScan(*msg, map_laser_x, map_laser_y, map_laser_theta);
 
-      std::vector<int> newly_occupied;
-      std::vector<int> newly_freed;
       particle.mapper.getAndClearChanges(newly_occupied, newly_freed);
-
-      particle.map_msg = particle.mapper.buildOccupancyGridMsg("map", msg->header.stamp);
       particle.likelihood_field.incrementalUpdate(
-        particle.map_msg, settings_.likelihood_max_distance, settings_.likelihood_sigma,
+        particle.mapper, settings_.likelihood_max_distance, settings_.likelihood_sigma,
         newly_occupied, newly_freed, settings_.freed_cells_rebuild_threshold);
       particle.has_map = true;
     }
+
+    all_particles_have_map_ = true;
 
     publishState(published_index, msg->header.stamp, scan_odom_pose);
     last_accepted_odom_pose_ = scan_odom_pose;
@@ -798,14 +809,6 @@ private:
     }
   }
 
-  bool anyParticleHasMap() const
-  {
-    return std::any_of(
-      particles_.begin(),
-      particles_.end(),
-      [](const Particle & particle) {return particle.has_map;});
-  }
-
   std::vector<CachedScanBeam> buildScoringBeams(const sensor_msgs::msg::LaserScan & scan) const
   {
     std::vector<CachedScanBeam> beams;
@@ -822,8 +825,8 @@ private:
       if (std::isfinite(range)) {
         scoring_range = std::min(static_cast<double>(range), static_cast<double>(scan.range_max));
         endpoint_is_hit = range < scan.range_max;
-      } else if (!std::isinf(range)) {
-        continue;
+      } else {
+        continue;  // -inf or any non-finite, non-nan value: skip
       }
 
       if (scoring_range <= scan.range_min) {
@@ -881,10 +884,10 @@ private:
           log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
         } else {
           log_likelihood += freeSpaceBeamReward(
-            particle.map_msg, laser_x, laser_y, beam_world_cos, beam_world_sin);
+            particle.mapper, laser_x, laser_y, beam_world_cos, beam_world_sin);
         }
         log_likelihood -= rayCrossingPenalty(
-          particle.map_msg,
+          particle.mapper,
           laser_x,
           laser_y,
           hit_x,
@@ -904,6 +907,15 @@ private:
       }
     }
 
+    // Helper: compute N_eff = 1/sum(w^2) from current particle weights.
+    auto computeNeff = [&]() {
+      double w2 = 0.0;
+      for (const auto & p : particles_) {
+        w2 += p.weight * p.weight;
+      }
+      return (w2 > 0.0 && std::isfinite(w2)) ? 1.0 / w2 : 0.0;
+    };
+
     if (!std::isfinite(max_log_likelihood)) {
       const double equal_weight = 1.0 / static_cast<double>(particles_.size());
       for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
@@ -911,6 +923,7 @@ private:
         particle.weight = equal_weight;
         stats.normalized_scores[particle_index] = equal_weight;
       }
+      stats.effective_particle_count = static_cast<double>(particles_.size());
       return stats;
     }
 
@@ -933,6 +946,7 @@ private:
         particle.weight = equal_weight;
         stats.normalized_scores[particle_index] = equal_weight;
       }
+      stats.effective_particle_count = static_cast<double>(particles_.size());
       return stats;
     }
 
@@ -942,63 +956,32 @@ private:
       stats.normalized_scores[particle_index] = particle.weight;
     }
 
+    stats.effective_particle_count = computeNeff();
     return stats;
   }
 
-  bool worldToMapCell(
-    const nav_msgs::msg::OccupancyGrid & map,
-    double wx,
-    double wy,
-    int & cell_x,
-    int & cell_y) const
-  {
-    if (map.info.resolution <= 0.0) {
-      return false;
-    }
-
-    const double origin_x = map.info.origin.position.x;
-    const double origin_y = map.info.origin.position.y;
-    cell_x = static_cast<int>(std::floor((wx - origin_x) / map.info.resolution));
-    cell_y = static_cast<int>(std::floor((wy - origin_y) / map.info.resolution));
-    return cell_x >= 0 && cell_y >= 0 &&
-           cell_x < static_cast<int>(map.info.width) &&
-           cell_y < static_cast<int>(map.info.height);
-  }
-
-  int mapCellValue(const nav_msgs::msg::OccupancyGrid & map, int cell_x, int cell_y) const
-  {
-    if (cell_x < 0 || cell_y < 0 ||
-      cell_x >= static_cast<int>(map.info.width) ||
-      cell_y >= static_cast<int>(map.info.height))
-    {
-      return -1;
-    }
-
-    const int index = cell_y * static_cast<int>(map.info.width) + cell_x;
-    return map.data[static_cast<std::size_t>(index)];
-  }
-
   double rayCrossingPenalty(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const OccupancyMapper & mapper,
     double start_x,
     double start_y,
     double end_x,
     double end_y,
     bool endpoint_is_hit) const
   {
-    if (map.data.empty()) {
+    const auto & log_odds = mapper.getLogOdds();
+    if (log_odds.empty()) {
       return 0.0;
     }
 
     int start_cell_x = 0;
     int start_cell_y = 0;
-    if (!worldToMapCell(map, start_x, start_y, start_cell_x, start_cell_y)) {
+    if (!mapper.worldToGrid(start_x, start_y, start_cell_x, start_cell_y)) {
       return 0.0;
     }
 
     int end_cell_x = 0;
     int end_cell_y = 0;
-    if (!worldToMapCell(map, end_x, end_y, end_cell_x, end_cell_y)) {
+    if (!mapper.worldToGrid(end_x, end_y, end_cell_x, end_cell_y)) {
       return 0.0;
     }
 
@@ -1014,11 +997,19 @@ private:
         end_exclusive - settings_.ray_endpoint_margin_cells;
     }
 
+    const int width = mapper.getConfig().width;
+    // Convert probability threshold to log-odds once per call.
+    const double p = settings_.ray_occupied_threshold / 100.0;
+    const double lo_threshold = std::log(p / (1.0 - p));
+
     double penalty = 0.0;
     bool inside_occupied_run = false;
     for (std::size_t i = 1; i < end_exclusive; ++i) {
-      const int cell_value = mapCellValue(map, cells[i].x, cells[i].y);
-      const bool occupied = cell_value >= settings_.ray_occupied_threshold;
+      if (!mapper.isValidCell(cells[i].x, cells[i].y)) {
+        continue;
+      }
+      const int index = cells[i].y * width + cells[i].x;
+      const bool occupied = log_odds[static_cast<std::size_t>(index)] >= lo_threshold;
 
       if (occupied && !inside_occupied_run) {
         penalty += settings_.ray_occupied_crossing_penalty;
@@ -1035,25 +1026,30 @@ private:
   }
 
   double freeSpaceBeamReward(
-    const nav_msgs::msg::OccupancyGrid & map,
+    const OccupancyMapper & mapper,
     double start_x,
     double start_y,
     double beam_world_cos,
     double beam_world_sin) const
   {
-    if (map.data.empty() || settings_.free_space_reward_per_cell <= 0.0) {
+    if (settings_.free_space_reward_per_cell <= 0.0) {
+      return 0.0;
+    }
+
+    const auto & log_odds = mapper.getLogOdds();
+    if (log_odds.empty()) {
       return 0.0;
     }
 
     int cx = 0;
     int cy = 0;
-    if (!worldToMapCell(map, start_x, start_y, cx, cy)) {
+    if (!mapper.worldToGrid(start_x, start_y, cx, cy)) {
       return 0.0;
     }
 
-    const double res = map.info.resolution;
-    const int max_steps =
-      static_cast<int>(map.info.width) + static_cast<int>(map.info.height);
+    const auto & cfg = mapper.getConfig();
+    const double res = cfg.resolution;
+    const int max_steps = cfg.width + cfg.height;
     double reward = 0.0;
 
     for (int step = 1; step <= max_steps; ++step) {
@@ -1061,13 +1057,16 @@ private:
       const double wy = start_y + step * res * beam_world_sin;
       int cell_x = 0;
       int cell_y = 0;
-      if (!worldToMapCell(map, wx, wy, cell_x, cell_y)) {
+      if (!mapper.worldToGrid(wx, wy, cell_x, cell_y)) {
         break;
       }
-      const int val = mapCellValue(map, cell_x, cell_y);
-      if (val >= 0 && val < 50) {
+      const int index = cell_y * cfg.width + cell_x;
+      const double lo = log_odds[static_cast<std::size_t>(index)];
+      if (lo < 0.0) {
+        // Observed free cell — reward it.
         reward += settings_.free_space_reward_per_cell;
-      } else if (val >= 50) {
+      } else {
+        // Occupied or unobserved (lo >= 0) — stop traversal.
         break;
       }
     }
@@ -1149,37 +1148,6 @@ private:
     return current_index;
   }
 
-  ParticleStats computeParticleStats() const
-  {
-    ParticleStats stats;
-    if (particles_.empty()) {
-      return stats;
-    }
-
-    stats.raw_scores.reserve(particles_.size());
-    stats.normalized_scores.reserve(particles_.size());
-    stats.min_score = std::numeric_limits<double>::max();
-    double weight_square_sum = 0.0;
-
-    for (const auto & particle : particles_) {
-      stats.best_score = std::max(stats.best_score, particle.weight);
-      stats.min_score = std::min(stats.min_score, particle.weight);
-      stats.average_score += particle.weight;
-      weight_square_sum += particle.weight * particle.weight;
-      stats.normalized_scores.push_back(particle.weight);
-    }
-
-    stats.average_score /= static_cast<double>(particles_.size());
-    if (stats.min_score == std::numeric_limits<double>::max()) {
-      stats.min_score = 0.0;
-    }
-    if (weight_square_sum > 0.0 && std::isfinite(weight_square_sum)) {
-      stats.effective_particle_count = 1.0 / weight_square_sum;
-    }
-
-    return stats;
-  }
-
   bool shouldResample(double effective_particle_count) const
   {
     if (effective_particle_count <= 0.0 || !std::isfinite(effective_particle_count)) {
@@ -1252,7 +1220,8 @@ private:
   {
     const Particle & best_particle = particles_[best_index];
     if (best_particle.has_map) {
-      map_pub_->publish(best_particle.map_msg);
+      map_pub_->publish(
+        best_particle.mapper.buildOccupancyGridMsg("map", stamp));
     }
 
     geometry_msgs::msg::PoseArray particle_cloud;
@@ -1334,6 +1303,7 @@ private:
   std::size_t published_particle_id_{kInvalidParticleId};
   std::size_t leading_particle_id_{kInvalidParticleId};
   int leading_wins_{0};
+  bool all_particles_have_map_{false};
 
   std::deque<OdomSample> odom_buffer_{};
   Pose2D last_accepted_odom_pose_{};
