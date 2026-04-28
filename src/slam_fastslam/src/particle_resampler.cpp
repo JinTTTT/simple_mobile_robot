@@ -19,7 +19,7 @@ bool ParticleResampler::shouldResample(
 
 void ParticleResampler::resample(
   std::vector<FastSlamParticle> & particles,
-  std::size_t preserved_particle_id,
+  std::size_t selected_particle_id,
   std::size_t & next_particle_id,
   std::default_random_engine & rng) const
 {
@@ -47,12 +47,14 @@ void ParticleResampler::resample(
 
   cumulative_weights.back() = 1.0;
 
+  // Low-variance/systematic resampling walks evenly through the cumulative
+  // distribution so high-weight particles are copied without excessive jitter.
   std::uniform_real_distribution<double> start_distribution(
     0.0, 1.0 / static_cast<double>(particles.size()));
 
   std::vector<FastSlamParticle> new_particles;
   new_particles.reserve(particles.size());
-  bool published_id_preserved = false;
+  bool selected_id_preserved = false;
 
   double pointer = start_distribution(rng);
   const double step = 1.0 / static_cast<double>(particles.size());
@@ -64,8 +66,8 @@ void ParticleResampler::resample(
     }
 
     FastSlamParticle copied = particles[particle_index];
-    if (copied.id == preserved_particle_id && !published_id_preserved) {
-      published_id_preserved = true;
+    if (copied.id == selected_particle_id && !selected_id_preserved) {
+      selected_id_preserved = true;
     } else {
       copied.id = next_particle_id++;
     }

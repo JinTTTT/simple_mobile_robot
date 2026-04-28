@@ -19,7 +19,7 @@ public:
 
   void resample(
     std::vector<FastSlamParticle> & particles,
-    std::size_t preserved_particle_id,
+    std::size_t selected_particle_id,
     std::size_t & next_particle_id,
     std::default_random_engine & rng) const;
 };

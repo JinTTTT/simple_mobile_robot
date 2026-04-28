@@ -16,6 +16,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "slam_fastslam/fastslam.hpp"
+#include "slam_fastslam/utils.hpp"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Transform.h"
@@ -31,39 +32,14 @@ using slam_fastslam::FastSlam;
 using slam_fastslam::FastSlamParameters;
 using slam_fastslam::Pose2D;
 using slam_fastslam::normalizeAngle;
+using slam_fastslam::odometryMsgToPose2D;
+using slam_fastslam::yawToQuaternion;
 
 struct OdomSample
 {
   rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
   Pose2D pose{};
 };
-
-geometry_msgs::msg::Quaternion yawToQuaternion(double yaw)
-{
-  tf2::Quaternion quaternion;
-  quaternion.setRPY(0.0, 0.0, yaw);
-
-  geometry_msgs::msg::Quaternion msg;
-  msg.x = quaternion.x();
-  msg.y = quaternion.y();
-  msg.z = quaternion.z();
-  msg.w = quaternion.w();
-  return msg;
-}
-
-Pose2D odomMsgToPose(const nav_msgs::msg::Odometry & msg)
-{
-  Pose2D pose;
-  pose.x = msg.pose.pose.position.x;
-  pose.y = msg.pose.pose.position.y;
-
-  const auto & orientation = msg.pose.pose.orientation;
-  tf2::Quaternion quaternion(orientation.x, orientation.y, orientation.z, orientation.w);
-  double roll = 0.0;
-  double pitch = 0.0;
-  tf2::Matrix3x3(quaternion).getRPY(roll, pitch, pose.theta);
-  return pose;
-}
 
 class FastSlamNode : public rclcpp::Node
 {
@@ -88,7 +64,7 @@ public:
     const auto map_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
     map_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/map", map_qos);
     particle_pub_ = create_publisher<geometry_msgs::msg::PoseArray>("/particlecloud", 10);
-    best_path_pub_ = create_publisher<nav_msgs::msg::Path>("/best_path", 10);
+    selected_path_pub_ = create_publisher<nav_msgs::msg::Path>("/best_path", 10);
     estimated_pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/estimated_pose", 10);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -195,15 +171,15 @@ private:
 
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
-    const Pose2D odom_pose = odomMsgToPose(*msg);
+    const Pose2D odom_pose = odometryMsgToPose2D(*msg);
     const rclcpp::Time odom_stamp(msg->header.stamp);
     odom_buffer_.push_back(OdomSample{odom_stamp, odom_pose});
     pruneOdomBuffer(odom_stamp);
     have_odom_ = true;
 
-    if (!have_last_accepted_odom_) {
-      last_accepted_odom_pose_ = odom_pose;
-      have_last_accepted_odom_ = true;
+    if (!have_last_update_odom_) {
+      last_update_odom_pose_ = odom_pose;
+      have_last_update_odom_ = true;
       RCLCPP_INFO_ONCE(get_logger(), "Received first odometry message.");
     }
   }
@@ -240,7 +216,7 @@ private:
 
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
   {
-    if (!have_odom_ || !have_last_accepted_odom_) {
+    if (!have_odom_ || !have_last_update_odom_) {
       return;
     }
 
@@ -256,29 +232,29 @@ private:
       return;
     }
 
-    if (!fast_slam_.shouldAcceptUpdate(last_accepted_odom_pose_, scan_odom_pose)) {
+    if (!fast_slam_.shouldAcceptUpdate(last_update_odom_pose_, scan_odom_pose)) {
       return;
     }
 
-    const auto update = fast_slam_.update(*msg, last_accepted_odom_pose_, scan_odom_pose);
+    const auto update = fast_slam_.update(*msg, last_update_odom_pose_, scan_odom_pose);
     if (!update.updated) {
       return;
     }
 
-    publishState(update.published_index, msg->header.stamp, scan_odom_pose);
-    last_accepted_odom_pose_ = scan_odom_pose;
+    publishState(update.selected_particle_index, msg->header.stamp, scan_odom_pose);
+    last_update_odom_pose_ = scan_odom_pose;
 
     RCLCPP_INFO_THROTTLE(
       get_logger(),
       *get_clock(),
       2000,
-      "N_eff=%.1f best_w=%.2f best_ll=%.1f resampled=%s particle_switched=%s published=%zu",
+      "N_eff=%.1f highest_w=%.2f highest_ll=%.1f resampled=%s selected_changed=%s selected=%zu",
       update.stats.effective_particle_count,
-      update.best_weight,
-      update.best_log_likelihood,
+      update.highest_weight,
+      update.highest_log_likelihood,
       update.resampled ? "yes" : "no",
-      update.particle_switched ? "yes" : "no",
-      update.published_index);
+      update.selected_particle_changed ? "yes" : "no",
+      update.selected_particle_index);
   }
 
   void pruneOdomBuffer(const rclcpp::Time & newest_stamp)
@@ -342,18 +318,18 @@ private:
   }
 
   void publishState(
-    std::size_t best_index,
+    std::size_t selected_index,
     const builtin_interfaces::msg::Time & stamp,
     const Pose2D & odom_pose_at_stamp)
   {
     const auto & particles = fast_slam_.particles();
-    if (best_index >= particles.size()) {
+    if (selected_index >= particles.size()) {
       return;
     }
 
-    const auto & best_particle = particles[best_index];
-    if (best_particle.has_map) {
-      map_pub_->publish(best_particle.mapper.buildOccupancyGridMsg("map", stamp));
+    const auto & selected_particle = particles[selected_index];
+    if (selected_particle.has_map) {
+      map_pub_->publish(selected_particle.mapper.buildOccupancyGridMsg("map", stamp));
     }
 
     geometry_msgs::msg::PoseArray particle_cloud;
@@ -369,30 +345,30 @@ private:
     }
     particle_pub_->publish(particle_cloud);
 
-    nav_msgs::msg::Path best_path;
-    best_path.header.frame_id = "map";
-    best_path.header.stamp = stamp;
-    best_path.poses.reserve(best_particle.trajectory.size());
-    for (const auto & trajectory_pose : best_particle.trajectory) {
+    nav_msgs::msg::Path selected_path;
+    selected_path.header.frame_id = "map";
+    selected_path.header.stamp = stamp;
+    selected_path.poses.reserve(selected_particle.trajectory.size());
+    for (const auto & trajectory_pose : selected_particle.trajectory) {
       geometry_msgs::msg::PoseStamped pose_stamped;
       pose_stamped.header.frame_id = "map";
       pose_stamped.header.stamp = trajectory_pose.stamp;
       pose_stamped.pose.position.x = trajectory_pose.pose.x;
       pose_stamped.pose.position.y = trajectory_pose.pose.y;
       pose_stamped.pose.orientation = yawToQuaternion(trajectory_pose.pose.theta);
-      best_path.poses.push_back(pose_stamped);
+      selected_path.poses.push_back(pose_stamped);
     }
-    best_path_pub_->publish(best_path);
+    selected_path_pub_->publish(selected_path);
 
     geometry_msgs::msg::PoseStamped estimated_pose;
     estimated_pose.header.frame_id = "map";
     estimated_pose.header.stamp = stamp;
-    estimated_pose.pose.position.x = best_particle.pose.x;
-    estimated_pose.pose.position.y = best_particle.pose.y;
-    estimated_pose.pose.orientation = yawToQuaternion(best_particle.pose.theta);
+    estimated_pose.pose.position.x = selected_particle.pose.x;
+    estimated_pose.pose.position.y = selected_particle.pose.y;
+    estimated_pose.pose.orientation = yawToQuaternion(selected_particle.pose.theta);
     estimated_pose_pub_->publish(estimated_pose);
 
-    publishMapToOdomTf(best_particle.pose, odom_pose_at_stamp, stamp);
+    publishMapToOdomTf(selected_particle.pose, odom_pose_at_stamp, stamp);
   }
 
   void publishMapToOdomTf(
@@ -429,9 +405,9 @@ private:
   FastSlam fast_slam_{};
 
   std::deque<OdomSample> odom_buffer_{};
-  Pose2D last_accepted_odom_pose_{};
+  Pose2D last_update_odom_pose_{};
   bool have_odom_{false};
-  bool have_last_accepted_odom_{false};
+  bool have_last_update_odom_{false};
   Pose2D laser_offset_{};
   bool laser_offset_known_{false};
 
@@ -439,7 +415,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr particle_pub_;
-  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr best_path_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr selected_path_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr estimated_pose_pub_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

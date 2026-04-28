@@ -6,8 +6,8 @@
 
 #include "builtin_interfaces/msg/time.hpp"
 #include "mapping/occupancy_mapper.hpp"
-#include "slam_fastslam/fastslam_types.hpp"
 #include "slam_fastslam/likelihood_field.hpp"
+#include "slam_fastslam/utils.hpp"
 
 namespace slam_fastslam
 {

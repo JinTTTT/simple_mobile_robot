@@ -55,10 +55,10 @@ struct FastSlamUpdateResult
 {
   bool updated{false};
   bool resampled{false};
-  bool particle_switched{false};
-  std::size_t published_index{0U};
-  double best_weight{0.0};
-  double best_log_likelihood{-std::numeric_limits<double>::infinity()};
+  bool selected_particle_changed{false};
+  std::size_t selected_particle_index{0U};
+  double highest_weight{0.0};
+  double highest_log_likelihood{-std::numeric_limits<double>::infinity()};
   FastSlamParticleStats stats{};
 };
 
@@ -86,9 +86,9 @@ public:
 private:
   void initializeParticles();
   FastSlamParticleStats scoreParticles(const std::vector<CachedScanBeam> & scoring_beams);
-  std::size_t bestParticleIndex() const;
+  std::size_t highestWeightParticleIndex() const;
   std::size_t findParticleById(std::size_t id) const;
-  std::size_t selectPublishedParticleIndex(std::size_t best_index);
+  std::size_t selectOutputParticleIndex(std::size_t candidate_index);
 
   FastSlamParameters parameters_{};
   std::default_random_engine rng_{std::random_device{}()};
@@ -101,10 +101,10 @@ private:
   ScanScorer scan_scorer_{};
   std::vector<FastSlamParticle> particles_{};
   std::size_t next_particle_id_{0U};
-  std::size_t published_particle_id_{kInvalidParticleId};
-  std::size_t leading_particle_id_{kInvalidParticleId};
-  int leading_wins_{0};
-  bool all_particles_have_map_{false};
+  std::size_t selected_particle_id_{kInvalidParticleId};
+  std::size_t candidate_particle_id_{kInvalidParticleId};
+  int candidate_consecutive_wins_{0};
+  bool particles_have_maps_{false};
 };
 
 }  // namespace slam_fastslam

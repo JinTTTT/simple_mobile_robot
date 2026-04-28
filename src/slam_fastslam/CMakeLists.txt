@@ -37,6 +37,7 @@ target_include_directories(slam_fastslam_core PUBLIC
 
 ament_target_dependencies(slam_fastslam_core
   builtin_interfaces
+  geometry_msgs
   mapping
   nav_msgs
   sensor_msgs
@@ -48,6 +49,7 @@ target_link_libraries(slam_fastslam_core
 
 add_executable(fastslam_node
   src/fastslam_node.cpp
+  src/utils.cpp
 )
 
 target_include_directories(fastslam_node PUBLIC

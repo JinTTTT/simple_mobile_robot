@@ -2,6 +2,9 @@
 
 #include <cmath>
 
+#include "geometry_msgs/msg/quaternion.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+
 namespace slam_fastslam
 {
 
@@ -12,6 +15,8 @@ struct Pose2D
   double theta{0.0};
 };
 
+// Keep yaw values in [-pi, pi] so interpolation and motion updates take
+// the shortest angular path.
 inline double normalizeAngle(double angle)
 {
   while (angle > M_PI) {
@@ -22,5 +27,8 @@ inline double normalizeAngle(double angle)
   }
   return angle;
 }
+
+geometry_msgs::msg::Quaternion yawToQuaternion(double yaw);
+Pose2D odometryMsgToPose2D(const nav_msgs::msg::Odometry & msg);
 
 }  // namespace slam_fastslam

@@ -5,8 +5,8 @@
 
 #include "mapping/occupancy_mapper.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
-#include "slam_fastslam/fastslam_types.hpp"
 #include "slam_fastslam/likelihood_field.hpp"
+#include "slam_fastslam/utils.hpp"
 
 namespace slam_fastslam
 {

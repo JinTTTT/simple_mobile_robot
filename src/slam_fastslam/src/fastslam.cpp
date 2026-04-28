@@ -4,6 +4,8 @@
 #include <cmath>
 #include <limits>
 
+#include "slam_fastslam/utils.hpp"
+
 namespace slam_fastslam
 {
 
@@ -76,7 +78,7 @@ FastSlamUpdateResult FastSlam::update(
 
   const std::vector<CachedScanBeam> scoring_beams = scan_scorer_.buildScoringBeams(scan);
 
-  if (all_particles_have_map_) {
+  if (particles_have_maps_) {
     result.stats = scoreParticles(scoring_beams);
   } else {
     const double equal_weight = 1.0 / static_cast<double>(particles_.size());
@@ -86,30 +88,34 @@ FastSlamUpdateResult FastSlam::update(
     result.stats.effective_particle_count = static_cast<double>(particles_.size());
   }
 
-  const std::size_t best_index = bestParticleIndex();
-  result.best_weight = particles_[best_index].weight;
-  result.best_log_likelihood = particles_[best_index].log_likelihood;
+  const std::size_t highest_weight_index = highestWeightParticleIndex();
+  result.highest_weight = particles_[highest_weight_index].weight;
+  result.highest_log_likelihood = particles_[highest_weight_index].log_likelihood;
 
-  const std::size_t pre_select_id = published_particle_id_;
-  std::size_t published_index = selectPublishedParticleIndex(best_index);
-  result.particle_switched = (published_particle_id_ != pre_select_id);
+  const std::size_t previous_selected_particle_id = selected_particle_id_;
+  std::size_t selected_particle_index = selectOutputParticleIndex(highest_weight_index);
+  result.selected_particle_changed = (selected_particle_id_ != previous_selected_particle_id);
 
   result.resampled = particle_resampler_.shouldResample(
     result.stats.effective_particle_count,
     particles_.size(),
     parameters_.resample_min_eff_ratio);
   if (result.resampled) {
-    const std::size_t pre_resample_id = particles_[published_index].id;
+    const std::size_t pre_resample_id = particles_[selected_particle_index].id;
     particle_resampler_.resample(particles_, pre_resample_id, next_particle_id_, rng_);
     const std::size_t post_resample_index = findParticleById(pre_resample_id);
-    published_index =
-      (post_resample_index < particles_.size()) ? post_resample_index : bestParticleIndex();
-    published_particle_id_ = particles_[published_index].id;
+    // Keep publishing the same selected hypothesis if resampling preserved it.
+    selected_particle_index =
+      (post_resample_index <
+      particles_.size()) ? post_resample_index : highestWeightParticleIndex();
+    selected_particle_id_ = particles_[selected_particle_index].id;
   }
 
   std::vector<int> newly_occupied;
   std::vector<int> newly_freed;
 
+  // Every particle carries its own map hypothesis; update each map from the
+  // same scan transformed through that particle's pose.
   for (auto & particle : particles_) {
     TrajectoryPose trajectory_pose;
     trajectory_pose.pose = particle.pose;
@@ -135,8 +141,8 @@ FastSlamUpdateResult FastSlam::update(
     particle.has_map = true;
   }
 
-  all_particles_have_map_ = true;
-  result.published_index = published_index;
+  particles_have_maps_ = true;
+  result.selected_particle_index = selected_particle_index;
   result.updated = true;
   return result;
 }
@@ -146,7 +152,7 @@ void FastSlam::initializeParticles()
   particles_.assign(static_cast<std::size_t>(parameters_.num_particles), FastSlamParticle{});
   const double initial_weight = 1.0 / static_cast<double>(parameters_.num_particles);
   next_particle_id_ = 0U;
-  published_particle_id_ = kInvalidParticleId;
+  selected_particle_id_ = kInvalidParticleId;
   for (auto & particle : particles_) {
     particle.id = next_particle_id_++;
     particle.pose = Pose2D{};
@@ -202,7 +208,7 @@ FastSlamParticleStats FastSlam::scoreParticles(
     }
   }
 
-  // Helper: compute N_eff = 1/sum(w^2) from current particle weights.
+  // N_eff estimates how concentrated the particle weights are.
   auto computeNeff = [&]() {
       double w2 = 0.0;
       for (const auto & p : particles_) {
@@ -255,7 +261,7 @@ FastSlamParticleStats FastSlam::scoreParticles(
   return stats;
 }
 
-std::size_t FastSlam::bestParticleIndex() const
+std::size_t FastSlam::highestWeightParticleIndex() const
 {
   return static_cast<std::size_t>(std::distance(
            particles_.begin(),
@@ -280,46 +286,46 @@ std::size_t FastSlam::findParticleById(std::size_t id) const
   return static_cast<std::size_t>(std::distance(particles_.begin(), iterator));
 }
 
-std::size_t FastSlam::selectPublishedParticleIndex(std::size_t best_index)
+std::size_t FastSlam::selectOutputParticleIndex(std::size_t candidate_index)
 {
   if (particles_.empty()) {
     return 0U;
   }
 
-  const std::size_t current_index = findParticleById(published_particle_id_);
+  const std::size_t current_index = findParticleById(selected_particle_id_);
   if (current_index >= particles_.size() || !particles_[current_index].has_map) {
-    published_particle_id_ = particles_[best_index].id;
-    leading_particle_id_ = kInvalidParticleId;
-    leading_wins_ = 0;
-    return best_index;
+    selected_particle_id_ = particles_[candidate_index].id;
+    candidate_particle_id_ = kInvalidParticleId;
+    candidate_consecutive_wins_ = 0;
+    return candidate_index;
   }
 
-  // Published particle is still best: reset the challenger streak.
-  if (best_index == current_index) {
-    leading_particle_id_ = kInvalidParticleId;
-    leading_wins_ = 0;
+  // The selected output particle is still strongest: reset the challenger streak.
+  if (candidate_index == current_index) {
+    candidate_particle_id_ = kInvalidParticleId;
+    candidate_consecutive_wins_ = 0;
     return current_index;
   }
 
-  // A different particle is ahead: track its consecutive-win streak.
-  const std::size_t best_id = particles_[best_index].id;
-  if (best_id == leading_particle_id_) {
-    ++leading_wins_;
+  // A different particle is ahead: track its consecutive-win streak before switching output.
+  const std::size_t candidate_id = particles_[candidate_index].id;
+  if (candidate_id == candidate_particle_id_) {
+    ++candidate_consecutive_wins_;
   } else {
-    leading_particle_id_ = best_id;
-    leading_wins_ = 1;
+    candidate_particle_id_ = candidate_id;
+    candidate_consecutive_wins_ = 1;
   }
 
-  // Switch only when streak AND weight-ratio thresholds are both met.
-  const double published_weight = particles_[current_index].weight;
-  const double best_weight = particles_[best_index].weight;
-  if (leading_wins_ >= parameters_.consecutive_wins_to_switch &&
-    best_weight >= parameters_.switch_weight_ratio * published_weight)
+  // Switch only when streak and weight-ratio thresholds are both met.
+  const double current_weight = particles_[current_index].weight;
+  const double candidate_weight = particles_[candidate_index].weight;
+  if (candidate_consecutive_wins_ >= parameters_.consecutive_wins_to_switch &&
+    candidate_weight >= parameters_.switch_weight_ratio * current_weight)
   {
-    published_particle_id_ = best_id;
-    leading_particle_id_ = kInvalidParticleId;
-    leading_wins_ = 0;
-    return best_index;
+    selected_particle_id_ = candidate_id;
+    candidate_particle_id_ = kInvalidParticleId;
+    candidate_consecutive_wins_ = 0;
+    return candidate_index;
   }
 
   return current_index;

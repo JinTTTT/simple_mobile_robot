@@ -187,6 +187,8 @@ double ScanScorer::rayCrossingPenalty(
   const double p = options_.ray_occupied_threshold / 100.0;
   const double lo_threshold = std::log(p / (1.0 - p));
 
+  // Count occupied runs along the ray instead of every occupied cell, so a
+  // thick wall crossing is penalized once.
   double penalty = 0.0;
   bool inside_occupied_run = false;
   for (std::size_t i = 1; i < end_exclusive; ++i) {

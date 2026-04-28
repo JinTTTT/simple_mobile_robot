@@ -4,7 +4,7 @@
 #include <vector>
 
 #include "slam_fastslam/fastslam_particle.hpp"
-#include "slam_fastslam/fastslam_types.hpp"
+#include "slam_fastslam/utils.hpp"
 
 namespace slam_fastslam
 {
