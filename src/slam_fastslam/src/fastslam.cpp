@@ -3,21 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <utility>
 
 namespace slam_fastslam
 {
-
-double normalizeAngle(double angle)
-{
-  while (angle > M_PI) {
-    angle -= 2.0 * M_PI;
-  }
-  while (angle < -M_PI) {
-    angle += 2.0 * M_PI;
-  }
-  return angle;
-}
 
 FastSlam::FastSlam()
 {
@@ -37,6 +25,17 @@ void FastSlam::configure(
 {
   parameters_ = parameters;
   map_config_ = map_config;
+
+  MotionModelOptions motion_options;
+  motion_options.translation_noise_from_translation =
+    parameters_.translation_noise_from_translation;
+  motion_options.translation_noise_from_rotation = parameters_.translation_noise_from_rotation;
+  motion_options.translation_noise_base = parameters_.translation_noise_base;
+  motion_options.rotation_noise_from_rotation = parameters_.rotation_noise_from_rotation;
+  motion_options.rotation_noise_from_translation = parameters_.rotation_noise_from_translation;
+  motion_options.rotation_noise_base = parameters_.rotation_noise_base;
+  motion_model_.configure(motion_options);
+
   ScanScorerOptions scorer_options;
   scorer_options.scan_beam_step = parameters_.scan_beam_step;
   scorer_options.ray_occupied_threshold = parameters_.ray_occupied_threshold;
@@ -73,7 +72,7 @@ FastSlamUpdateResult FastSlam::update(
     return result;
   }
 
-  propagateParticles(previous_odom_pose, current_odom_pose);
+  motion_model_.propagate(particles_, previous_odom_pose, current_odom_pose, rng_);
 
   const std::vector<CachedScanBeam> scoring_beams = scan_scorer_.buildScoringBeams(scan);
 
@@ -95,10 +94,13 @@ FastSlamUpdateResult FastSlam::update(
   std::size_t published_index = selectPublishedParticleIndex(best_index);
   result.particle_switched = (published_particle_id_ != pre_select_id);
 
-  result.resampled = shouldResample(result.stats.effective_particle_count);
+  result.resampled = particle_resampler_.shouldResample(
+    result.stats.effective_particle_count,
+    particles_.size(),
+    parameters_.resample_min_eff_ratio);
   if (result.resampled) {
     const std::size_t pre_resample_id = particles_[published_index].id;
-    resampleParticles(pre_resample_id);
+    particle_resampler_.resample(particles_, pre_resample_id, next_particle_id_, rng_);
     const std::size_t post_resample_index = findParticleById(pre_resample_id);
     published_index =
       (post_resample_index < particles_.size()) ? post_resample_index : bestParticleIndex();
@@ -167,46 +169,6 @@ bool FastSlam::shouldAcceptUpdate(
 
   return translation >= parameters_.min_translation_for_update ||
          rotation >= parameters_.min_rotation_for_update;
-}
-
-void FastSlam::propagateParticles(const Pose2D & old_pose, const Pose2D & new_pose)
-{
-  double delta_rot1 = 0.0;
-  const double delta_x = new_pose.x - old_pose.x;
-  const double delta_y = new_pose.y - old_pose.y;
-  const double delta_trans = std::hypot(delta_x, delta_y);
-  if (delta_trans > 1e-6) {
-    delta_rot1 = normalizeAngle(std::atan2(delta_y, delta_x) - old_pose.theta);
-  }
-  const double delta_rot2 = normalizeAngle(new_pose.theta - old_pose.theta - delta_rot1);
-
-  const double total_rotation = std::abs(delta_rot1) + std::abs(delta_rot2);
-  const double trans_noise_std =
-    parameters_.translation_noise_from_translation * delta_trans +
-    parameters_.translation_noise_from_rotation * total_rotation +
-    parameters_.translation_noise_base;
-  const double rot1_noise_std =
-    parameters_.rotation_noise_from_rotation * std::abs(delta_rot1) +
-    parameters_.rotation_noise_from_translation * delta_trans +
-    parameters_.rotation_noise_base;
-  const double rot2_noise_std =
-    parameters_.rotation_noise_from_rotation * std::abs(delta_rot2) +
-    parameters_.rotation_noise_from_translation * delta_trans +
-    parameters_.rotation_noise_base;
-
-  std::normal_distribution<double> trans_noise(0.0, trans_noise_std);
-  std::normal_distribution<double> rot1_noise(0.0, rot1_noise_std);
-  std::normal_distribution<double> rot2_noise(0.0, rot2_noise_std);
-
-  for (auto & particle : particles_) {
-    const double noisy_rot1 = delta_rot1 + rot1_noise(rng_);
-    const double noisy_trans = delta_trans + trans_noise(rng_);
-    const double noisy_rot2 = delta_rot2 + rot2_noise(rng_);
-
-    particle.pose.x += noisy_trans * std::cos(particle.pose.theta + noisy_rot1);
-    particle.pose.y += noisy_trans * std::sin(particle.pose.theta + noisy_rot1);
-    particle.pose.theta = normalizeAngle(particle.pose.theta + noisy_rot1 + noisy_rot2);
-  }
 }
 
 FastSlamParticleStats FastSlam::scoreParticles(
@@ -361,71 +323,6 @@ std::size_t FastSlam::selectPublishedParticleIndex(std::size_t best_index)
   }
 
   return current_index;
-}
-
-bool FastSlam::shouldResample(double effective_particle_count) const
-{
-  if (effective_particle_count <= 0.0 || !std::isfinite(effective_particle_count)) {
-    return false;
-  }
-  return effective_particle_count <
-         (parameters_.resample_min_eff_ratio * static_cast<double>(particles_.size()));
-}
-
-void FastSlam::resampleParticles(std::size_t preserved_particle_id)
-{
-  double weight_sum = 0.0;
-  for (const auto & particle : particles_) {
-    weight_sum += particle.weight;
-  }
-
-  if (weight_sum <= 0.0 || !std::isfinite(weight_sum)) {
-    const double equal_weight = 1.0 / static_cast<double>(particles_.size());
-    for (auto & particle : particles_) {
-      particle.weight = equal_weight;
-    }
-    weight_sum = 1.0;
-  }
-
-  std::vector<double> cumulative_weights;
-  cumulative_weights.reserve(particles_.size());
-  double cumulative_sum = 0.0;
-  for (auto & particle : particles_) {
-    particle.weight /= weight_sum;
-    cumulative_sum += particle.weight;
-    cumulative_weights.push_back(cumulative_sum);
-  }
-
-  cumulative_weights.back() = 1.0;
-
-  std::uniform_real_distribution<double> start_distribution(
-    0.0, 1.0 / static_cast<double>(particles_.size()));
-
-  std::vector<FastSlamParticle> new_particles;
-  new_particles.reserve(particles_.size());
-  bool published_id_preserved = false;
-
-  double pointer = start_distribution(rng_);
-  const double step = 1.0 / static_cast<double>(particles_.size());
-  std::size_t particle_index = 0;
-
-  for (std::size_t i = 0; i < particles_.size(); ++i) {
-    while (pointer > cumulative_weights[particle_index]) {
-      particle_index++;
-    }
-
-    FastSlamParticle copied = particles_[particle_index];
-    if (copied.id == preserved_particle_id && !published_id_preserved) {
-      published_id_preserved = true;
-    } else {
-      copied.id = next_particle_id_++;
-    }
-    copied.weight = 1.0 / static_cast<double>(particles_.size());
-    new_particles.push_back(std::move(copied));
-    pointer += step;
-  }
-
-  particles_ = std::move(new_particles);
 }
 
 }  // namespace slam_fastslam

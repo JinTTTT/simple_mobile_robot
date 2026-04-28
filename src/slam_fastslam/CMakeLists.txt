@@ -26,6 +26,8 @@ endif()
 add_library(slam_fastslam_core
   src/fastslam.cpp
   src/likelihood_field.cpp
+  src/motion_model.cpp
+  src/particle_resampler.cpp
   src/scan_scorer.cpp
 )
 

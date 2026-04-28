@@ -1,16 +1,15 @@
 #pragma once
 
 #include <cstddef>
-#include <deque>
 #include <limits>
 #include <random>
 #include <vector>
 
-#include "builtin_interfaces/msg/time.hpp"
 #include "mapping/occupancy_mapper.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
-#include "slam_fastslam/fastslam_types.hpp"
-#include "slam_fastslam/likelihood_field.hpp"
+#include "slam_fastslam/fastslam_particle.hpp"
+#include "slam_fastslam/motion_model.hpp"
+#include "slam_fastslam/particle_resampler.hpp"
 #include "slam_fastslam/scan_scorer.hpp"
 
 namespace slam_fastslam
@@ -63,24 +62,6 @@ struct FastSlamUpdateResult
   FastSlamParticleStats stats{};
 };
 
-struct TrajectoryPose
-{
-  Pose2D pose{};
-  builtin_interfaces::msg::Time stamp{};
-};
-
-struct FastSlamParticle
-{
-  std::size_t id{0};
-  Pose2D pose{};
-  double weight{0.0};
-  double log_likelihood{-std::numeric_limits<double>::infinity()};
-  std::deque<TrajectoryPose> trajectory{};
-  OccupancyMapper mapper{};
-  LikelihoodField likelihood_field{};
-  bool has_map{false};
-};
-
 class FastSlam
 {
 public:
@@ -104,13 +85,10 @@ public:
 
 private:
   void initializeParticles();
-  void propagateParticles(const Pose2D & old_pose, const Pose2D & new_pose);
   FastSlamParticleStats scoreParticles(const std::vector<CachedScanBeam> & scoring_beams);
   std::size_t bestParticleIndex() const;
   std::size_t findParticleById(std::size_t id) const;
   std::size_t selectPublishedParticleIndex(std::size_t best_index);
-  bool shouldResample(double effective_particle_count) const;
-  void resampleParticles(std::size_t preserved_particle_id);
 
   FastSlamParameters parameters_{};
   std::default_random_engine rng_{std::random_device{}()};
@@ -118,6 +96,8 @@ private:
 
   OccupancyMapper::Config map_config_{};
   Pose2D laser_offset_{};
+  MotionModel motion_model_{};
+  ParticleResampler particle_resampler_{};
   ScanScorer scan_scorer_{};
   std::vector<FastSlamParticle> particles_{};
   std::size_t next_particle_id_{0U};
@@ -126,7 +106,5 @@ private:
   int leading_wins_{0};
   bool all_particles_have_map_{false};
 };
-
-double normalizeAngle(double angle);
 
 }  // namespace slam_fastslam
