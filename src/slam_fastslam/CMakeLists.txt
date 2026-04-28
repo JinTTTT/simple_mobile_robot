@@ -23,8 +23,31 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
+add_library(slam_fastslam_core
+  src/fastslam.cpp
+)
+
+target_include_directories(slam_fastslam_core PUBLIC
+  include
+)
+
+ament_target_dependencies(slam_fastslam_core
+  builtin_interfaces
+  mapping
+  nav_msgs
+  sensor_msgs
+)
+
+target_link_libraries(slam_fastslam_core
+  mapping::occupancy_mapper_lib
+)
+
 add_executable(fastslam_node
   src/fastslam_node.cpp
+)
+
+target_include_directories(fastslam_node PUBLIC
+  include
 )
 
 ament_target_dependencies(fastslam_node
@@ -40,12 +63,18 @@ ament_target_dependencies(fastslam_node
 )
 
 target_link_libraries(fastslam_node
-  mapping::occupancy_mapper_lib
+  slam_fastslam_core
 )
 
 install(TARGETS
+  slam_fastslam_core
   fastslam_node
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY
+  include/
+  DESTINATION include
 )
 
 install(DIRECTORY

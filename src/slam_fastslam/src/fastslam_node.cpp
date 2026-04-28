@@ -3,22 +3,19 @@
 #include <cstddef>
 #include <deque>
 #include <functional>
-#include <limits>
 #include <memory>
-#include <random>
 #include <string>
-#include <vector>
 
 #include "builtin_interfaces/msg/time.hpp"
 #include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
-#include "mapping/occupancy_mapper.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "slam_fastslam/fastslam.hpp"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Transform.h"
@@ -30,79 +27,16 @@
 namespace
 {
 
-struct Pose2D
-{
-  double x{0.0};
-  double y{0.0};
-  double theta{0.0};
-};
-
-struct Settings
-{
-  int num_particles{20};
-  std::size_t scan_beam_step{10};
-  double likelihood_max_distance{0.5};
-  double likelihood_sigma{0.15};
-  int ray_occupied_threshold{65};
-  double ray_occupied_crossing_penalty{2.0};
-  double ray_penalty_max_per_beam{6.0};
-  std::size_t ray_endpoint_margin_cells{2};
-  double translation_noise_from_translation{0.05};
-  double translation_noise_from_rotation{0.01};
-  double translation_noise_base{0.005};
-  double rotation_noise_from_rotation{0.05};
-  double rotation_noise_from_translation{0.02};
-  double rotation_noise_base{0.005};
-  double min_translation_for_update{0.10};
-  double min_rotation_for_update{0.08};
-  double resample_min_eff_ratio{0.3};
-  double free_space_reward_per_cell{0.01};
-  std::size_t traj_max_poses{500};
-  int consecutive_wins_to_switch{3};
-  double switch_weight_ratio{2.0};
-  std::size_t freed_cells_rebuild_threshold{5};
-};
-
-struct ParticleStats
-{
-  double best_score{0.0};
-  double average_score{0.0};
-  double min_score{0.0};
-  double effective_particle_count{0.0};
-  std::vector<double> raw_scores{};
-  std::vector<double> normalized_scores{};
-};
+using slam_fastslam::FastSlam;
+using slam_fastslam::FastSlamParameters;
+using slam_fastslam::Pose2D;
+using slam_fastslam::normalizeAngle;
 
 struct OdomSample
 {
   rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
   Pose2D pose{};
 };
-
-struct GridCell
-{
-  int x{0};
-  int y{0};
-};
-
-struct CachedScanBeam
-{
-  double range{0.0};
-  double cos_angle{1.0};
-  double sin_angle{0.0};
-  bool endpoint_is_hit{false};
-};
-
-double normalizeAngle(double angle)
-{
-  while (angle > M_PI) {
-    angle -= 2.0 * M_PI;
-  }
-  while (angle < -M_PI) {
-    angle += 2.0 * M_PI;
-  }
-  return angle;
-}
 
 geometry_msgs::msg::Quaternion yawToQuaternion(double yaw)
 {
@@ -131,268 +65,6 @@ Pose2D odomMsgToPose(const nav_msgs::msg::Odometry & msg)
   return pose;
 }
 
-std::vector<GridCell> bresenhamLine(int x0, int y0, int x1, int y1)
-{
-  std::vector<GridCell> cells;
-
-  const int dx = std::abs(x1 - x0);
-  const int dy = std::abs(y1 - y0);
-  const int sx = (x0 < x1) ? 1 : -1;
-  const int sy = (y0 < y1) ? 1 : -1;
-  int err = dx - dy;
-
-  int x = x0;
-  int y = y0;
-
-  while (true) {
-    cells.push_back(GridCell{x, y});
-
-    if (x == x1 && y == y1) {
-      break;
-    }
-
-    const int e2 = 2 * err;
-    if (e2 > -dy) {
-      err -= dy;
-      x += sx;
-    }
-    if (e2 < dx) {
-      err += dx;
-      y += sy;
-    }
-  }
-
-  return cells;
-}
-
-class LikelihoodField
-{
-public:
-  void build(const OccupancyMapper & mapper, double max_distance_m, double sigma_m)
-  {
-    const auto & cfg = mapper.getConfig();
-    const int width = cfg.width;
-    const int height = cfg.height;
-    const int total_cells = width * height;
-    if (total_cells <= 0 || max_distance_m <= 0.0) {
-      field_map_.data.clear();
-      distance_cells_.clear();
-      return;
-    }
-
-    const double resolution = cfg.resolution;
-    const int max_distance_cells = static_cast<int>(std::ceil(max_distance_m / resolution));
-
-    // Populate field_map_ metadata so valueAtWorld() can use it.
-    field_map_.info.resolution = cfg.resolution;
-    field_map_.info.width = static_cast<std::uint32_t>(width);
-    field_map_.info.height = static_cast<std::uint32_t>(height);
-    field_map_.info.origin.position.x = cfg.origin_x;
-    field_map_.info.origin.position.y = cfg.origin_y;
-    field_map_.info.origin.orientation.w = 1.0;
-
-    std::vector<int> distance_to_wall(static_cast<std::size_t>(total_cells), max_distance_cells);
-    std::vector<int> queue(static_cast<std::size_t>(total_cells), 0);
-    int queue_head = 0;
-    int queue_tail = 0;
-
-    const auto & log_odds = mapper.getLogOdds();
-    for (int i = 0; i < total_cells; ++i) {
-      if (log_odds[static_cast<std::size_t>(i)] > 0.0) {
-        distance_to_wall[static_cast<std::size_t>(i)] = 0;
-        queue[static_cast<std::size_t>(queue_tail++)] = i;
-      }
-    }
-
-    const int offsets[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-
-    while (queue_head < queue_tail) {
-      const int index = queue[static_cast<std::size_t>(queue_head++)];
-      const int row = index / width;
-      const int col = index % width;
-      const int next_distance = distance_to_wall[static_cast<std::size_t>(index)] + 1;
-
-      if (next_distance > max_distance_cells) {
-        continue;
-      }
-
-      for (const auto & offset : offsets) {
-        const int next_col = col + offset[0];
-        const int next_row = row + offset[1];
-
-        if (next_col < 0 || next_row < 0 || next_col >= width || next_row >= height) {
-          continue;
-        }
-
-        const int next_index = next_row * width + next_col;
-        if (next_distance >= distance_to_wall[static_cast<std::size_t>(next_index)]) {
-          continue;
-        }
-
-        distance_to_wall[static_cast<std::size_t>(next_index)] = next_distance;
-        queue[static_cast<std::size_t>(queue_tail++)] = next_index;
-      }
-    }
-
-    const double two_sigma_sq = 2.0 * sigma_m * sigma_m;
-    field_map_.data.assign(static_cast<std::size_t>(total_cells), 0);
-    for (int i = 0; i < total_cells; ++i) {
-      const double distance_m = distance_to_wall[static_cast<std::size_t>(i)] * resolution;
-      const double likelihood = std::exp(-(distance_m * distance_m) / two_sigma_sq);
-      field_map_.data[static_cast<std::size_t>(i)] =
-        static_cast<int8_t>(std::round(likelihood * 100.0));
-    }
-
-    // Persist the distance field so incremental updates can reuse it.
-    width_ = width;
-    height_ = height;
-    max_distance_cells_ = max_distance_cells;
-    resolution_ = resolution;
-    two_sigma_sq_ = two_sigma_sq;
-    distance_cells_ = std::move(distance_to_wall);
-  }
-
-  // Update only the cells reachable from newly occupied cells via BFS.
-  // Falls back to a full build on first call, dimension change, or when the
-  // number of freed cells exceeds the noise threshold (genuine structural change).
-  // A small number of freed cells is treated as sensor noise and ignored —
-  // the field stays slightly stale for one scan, which is acceptable.
-  void incrementalUpdate(
-    const OccupancyMapper & mapper,
-    double max_distance_m,
-    double sigma_m,
-    const std::vector<int> & newly_occupied,
-    const std::vector<int> & newly_freed,
-    std::size_t freed_cells_rebuild_threshold)
-  {
-    const auto & cfg = mapper.getConfig();
-    const int new_width = cfg.width;
-    const int new_height = cfg.height;
-    const int new_max_dist =
-      static_cast<int>(std::ceil(max_distance_m / cfg.resolution));
-
-    const bool dimensions_changed =
-      (new_width != width_ || new_height != height_ || new_max_dist != max_distance_cells_);
-
-    const bool freed_cells_significant =
-      newly_freed.size() > freed_cells_rebuild_threshold;
-
-    if (distance_cells_.empty() || dimensions_changed || freed_cells_significant) {
-      build(mapper, max_distance_m, sigma_m);
-      return;
-    }
-
-    if (newly_occupied.empty()) {
-      return;
-    }
-
-    // BFS from every newly occupied cell, relaxing distances outward.
-    std::vector<int> queue;
-    queue.reserve(newly_occupied.size() * 64);
-
-    for (const int idx : newly_occupied) {
-      if (idx < 0 || idx >= static_cast<int>(distance_cells_.size())) {
-        continue;
-      }
-      if (distance_cells_[static_cast<std::size_t>(idx)] > 0) {
-        distance_cells_[static_cast<std::size_t>(idx)] = 0;
-        field_map_.data[static_cast<std::size_t>(idx)] = 100;
-        queue.push_back(idx);
-      }
-    }
-
-    const int offsets[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-
-    for (std::size_t head = 0; head < queue.size(); ++head) {
-      const int current = queue[head];
-      const int current_dist = distance_cells_[static_cast<std::size_t>(current)];
-      const int next_dist = current_dist + 1;
-
-      if (next_dist > max_distance_cells_) {
-        continue;
-      }
-
-      const int row = current / width_;
-      const int col = current % width_;
-
-      for (const auto & offset : offsets) {
-        const int next_col = col + offset[0];
-        const int next_row = row + offset[1];
-
-        if (next_col < 0 || next_row < 0 || next_col >= width_ || next_row >= height_) {
-          continue;
-        }
-
-        const int next_idx = next_row * width_ + next_col;
-        if (next_dist >= distance_cells_[static_cast<std::size_t>(next_idx)]) {
-          continue;
-        }
-
-        distance_cells_[static_cast<std::size_t>(next_idx)] = next_dist;
-        const double distance_m = next_dist * resolution_;
-        const double likelihood = std::exp(-(distance_m * distance_m) / two_sigma_sq_);
-        field_map_.data[static_cast<std::size_t>(next_idx)] =
-          static_cast<int8_t>(std::round(likelihood * 100.0));
-        queue.push_back(next_idx);
-      }
-    }
-  }
-
-  bool hasMap() const
-  {
-    return !field_map_.data.empty();
-  }
-
-  double valueAtWorld(double x, double y) const
-  {
-    if (!hasMap()) {
-      return 0.0;
-    }
-
-    const double resolution = field_map_.info.resolution;
-    const double origin_x = field_map_.info.origin.position.x;
-    const double origin_y = field_map_.info.origin.position.y;
-    const int col = static_cast<int>(std::floor((x - origin_x) / resolution));
-    const int row = static_cast<int>(std::floor((y - origin_y) / resolution));
-
-    if (col < 0 || row < 0 ||
-      col >= static_cast<int>(field_map_.info.width) ||
-      row >= static_cast<int>(field_map_.info.height))
-    {
-      return 0.0;
-    }
-
-    const int index = row * static_cast<int>(field_map_.info.width) + col;
-    return field_map_.data[static_cast<std::size_t>(index)] / 100.0;
-  }
-
-private:
-  nav_msgs::msg::OccupancyGrid field_map_{};
-  std::vector<int> distance_cells_{};
-  int width_{0};
-  int height_{0};
-  int max_distance_cells_{0};
-  double resolution_{0.0};
-  double two_sigma_sq_{0.0};
-};
-
-struct Particle
-{
-  std::size_t id{0};
-  Pose2D pose{};
-  double weight{0.0};
-  double log_likelihood{-std::numeric_limits<double>::infinity()};
-  struct TrajectoryPose
-  {
-    Pose2D pose{};
-    builtin_interfaces::msg::Time stamp{};
-  };
-  std::deque<TrajectoryPose> trajectory{};
-  OccupancyMapper mapper{};
-  LikelihoodField likelihood_field{};
-  bool has_map{false};
-};
-
 class FastSlamNode : public rclcpp::Node
 {
 public:
@@ -401,7 +73,7 @@ public:
   {
     loadParameters();
     configureMapConfig();
-    initializeParticles();
+    fast_slam_.configure(parameters_, map_config_);
 
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       "/odom",
@@ -426,98 +98,83 @@ public:
       get_logger(),
       "fastslam_node started with %d particles and motion thresholds (%.2f m, %.2f rad). "
       "Outputs include TF map->odom.",
-      settings_.num_particles,
-      settings_.min_translation_for_update,
-      settings_.min_rotation_for_update);
+      parameters_.num_particles,
+      parameters_.min_translation_for_update,
+      parameters_.min_rotation_for_update);
   }
 
 private:
   void loadParameters()
   {
     const int num_particles =
-      static_cast<int>(declare_parameter<int>("num_particles", settings_.num_particles));
-    settings_.num_particles = std::max(1, num_particles);
+      static_cast<int>(declare_parameter<int>("num_particles", parameters_.num_particles));
+    parameters_.num_particles = std::max(1, num_particles);
 
     const int scan_beam_step = static_cast<int>(
-      declare_parameter<int>("scan_beam_step", static_cast<int>(settings_.scan_beam_step)));
-    settings_.scan_beam_step = static_cast<std::size_t>(
-      std::max(1, scan_beam_step));
+      declare_parameter<int>("scan_beam_step", static_cast<int>(parameters_.scan_beam_step)));
+    parameters_.scan_beam_step = static_cast<std::size_t>(std::max(1, scan_beam_step));
 
-    settings_.likelihood_max_distance =
-      std::max(
+    parameters_.likelihood_max_distance = std::max(
       0.01,
-      declare_parameter<double>("likelihood_max_distance", settings_.likelihood_max_distance));
-
-    settings_.likelihood_sigma =
-      std::max(
+      declare_parameter<double>("likelihood_max_distance", parameters_.likelihood_max_distance));
+    parameters_.likelihood_sigma = std::max(
       0.01,
-      declare_parameter<double>("likelihood_sigma", settings_.likelihood_sigma));
-
-
-    settings_.translation_noise_from_translation = std::max(
+      declare_parameter<double>("likelihood_sigma", parameters_.likelihood_sigma));
+    parameters_.translation_noise_from_translation = std::max(
       0.0,
       declare_parameter<double>(
-        "translation_noise_from_translation", settings_.translation_noise_from_translation));
-    settings_.translation_noise_from_rotation = std::max(
+        "translation_noise_from_translation", parameters_.translation_noise_from_translation));
+    parameters_.translation_noise_from_rotation = std::max(
       0.0,
       declare_parameter<double>(
-        "translation_noise_from_rotation", settings_.translation_noise_from_rotation));
-    settings_.translation_noise_base =
-      std::max(
+        "translation_noise_from_rotation", parameters_.translation_noise_from_rotation));
+    parameters_.translation_noise_base = std::max(
       0.0,
-      declare_parameter<double>("translation_noise_base", settings_.translation_noise_base));
-    settings_.rotation_noise_from_rotation = std::max(
-      0.0,
-      declare_parameter<double>(
-        "rotation_noise_from_rotation",
-        settings_.rotation_noise_from_rotation));
-    settings_.rotation_noise_from_translation = std::max(
+      declare_parameter<double>("translation_noise_base", parameters_.translation_noise_base));
+    parameters_.rotation_noise_from_rotation = std::max(
       0.0,
       declare_parameter<double>(
-        "rotation_noise_from_translation", settings_.rotation_noise_from_translation));
-    settings_.rotation_noise_base =
-      std::max(
-      0.0,
-      declare_parameter<double>("rotation_noise_base", settings_.rotation_noise_base));
-
-    settings_.min_translation_for_update = std::max(
+        "rotation_noise_from_rotation", parameters_.rotation_noise_from_rotation));
+    parameters_.rotation_noise_from_translation = std::max(
       0.0,
       declare_parameter<double>(
-        "min_translation_for_update",
-        settings_.min_translation_for_update));
-    settings_.min_rotation_for_update =
-      std::max(
+        "rotation_noise_from_translation", parameters_.rotation_noise_from_translation));
+    parameters_.rotation_noise_base = std::max(
       0.0,
-      declare_parameter<double>("min_rotation_for_update", settings_.min_rotation_for_update));
-
-    settings_.resample_min_eff_ratio =
-      std::max(
-      0.0,
-      declare_parameter<double>("resample_min_eff_ratio", settings_.resample_min_eff_ratio));
-
-    settings_.free_space_reward_per_cell = std::max(
+      declare_parameter<double>("rotation_noise_base", parameters_.rotation_noise_base));
+    parameters_.min_translation_for_update = std::max(
       0.0,
       declare_parameter<double>(
-        "free_space_reward_per_cell", settings_.free_space_reward_per_cell));
-
-    settings_.consecutive_wins_to_switch = std::max(
+        "min_translation_for_update", parameters_.min_translation_for_update));
+    parameters_.min_rotation_for_update = std::max(
+      0.0,
+      declare_parameter<double>("min_rotation_for_update", parameters_.min_rotation_for_update));
+    parameters_.resample_min_eff_ratio = std::max(
+      0.0,
+      declare_parameter<double>("resample_min_eff_ratio", parameters_.resample_min_eff_ratio));
+    parameters_.free_space_reward_per_cell = std::max(
+      0.0,
+      declare_parameter<double>(
+        "free_space_reward_per_cell", parameters_.free_space_reward_per_cell));
+    parameters_.consecutive_wins_to_switch = std::max(
       1,
       static_cast<int>(
-        declare_parameter<int>("consecutive_wins_to_switch", settings_.consecutive_wins_to_switch)));
-    settings_.switch_weight_ratio = std::max(
+        declare_parameter<int>(
+          "consecutive_wins_to_switch", parameters_.consecutive_wins_to_switch)));
+    parameters_.switch_weight_ratio = std::max(
       1.0,
-      declare_parameter<double>("switch_weight_ratio", settings_.switch_weight_ratio));
+      declare_parameter<double>("switch_weight_ratio", parameters_.switch_weight_ratio));
 
     const int freed_cells_rebuild_threshold = static_cast<int>(
       declare_parameter<int>(
         "freed_cells_rebuild_threshold",
-        static_cast<int>(settings_.freed_cells_rebuild_threshold)));
-    settings_.freed_cells_rebuild_threshold =
+        static_cast<int>(parameters_.freed_cells_rebuild_threshold)));
+    parameters_.freed_cells_rebuild_threshold =
       static_cast<std::size_t>(std::max(0, freed_cells_rebuild_threshold));
 
     const int traj_max_poses = static_cast<int>(
-      declare_parameter<int>("traj_max_poses", static_cast<int>(settings_.traj_max_poses)));
-    settings_.traj_max_poses = static_cast<std::size_t>(std::max(1, traj_max_poses));
+      declare_parameter<int>("traj_max_poses", static_cast<int>(parameters_.traj_max_poses)));
+    parameters_.traj_max_poses = static_cast<std::size_t>(std::max(1, traj_max_poses));
 
     map_config_.resolution =
       std::max(0.001, declare_parameter<double>("map_resolution", map_config_.resolution));
@@ -526,22 +183,6 @@ private:
       static_cast<int>(declare_parameter<int>("map_height", map_config_.height));
     map_config_.width = std::max(1, map_width);
     map_config_.height = std::max(1, map_height);
-  }
-
-  void initializeParticles()
-  {
-    particles_.assign(static_cast<std::size_t>(settings_.num_particles), Particle{});
-    const double initial_weight = 1.0 / static_cast<double>(settings_.num_particles);
-    next_particle_id_ = 0U;
-    published_particle_id_ = kInvalidParticleId;
-    for (auto & particle : particles_) {
-      particle.id = next_particle_id_++;
-      particle.pose = Pose2D{};
-      particle.weight = initial_weight;
-      particle.trajectory.clear();
-      particle.mapper.configure(map_config_);
-      particle.has_map = false;
-    }
   }
 
   void configureMapConfig()
@@ -572,6 +213,7 @@ private:
     if (laser_offset_known_) {
       return;
     }
+
     try {
       const auto tf =
         tf_buffer_->lookupTransform("base_link", laser_frame_id, tf2::TimePointZero);
@@ -584,6 +226,7 @@ private:
       double pitch = 0.0;
       tf2::Matrix3x3(q).getRPY(roll, pitch, laser_offset_.theta);
       laser_offset_known_ = true;
+      fast_slam_.setLaserOffset(laser_offset_);
       RCLCPP_INFO(
         get_logger(),
         "Laser offset from base_link: (%.3f m, %.3f m, %.3f rad)",
@@ -613,75 +256,16 @@ private:
       return;
     }
 
-    if (!shouldAcceptUpdate(scan_odom_pose)) {
+    if (!fast_slam_.shouldAcceptUpdate(last_accepted_odom_pose_, scan_odom_pose)) {
       return;
     }
 
-    propagateParticles(last_accepted_odom_pose_, scan_odom_pose);
-
-    const std::vector<CachedScanBeam> scoring_beams = buildScoringBeams(*msg);
-
-    ParticleStats normalized_stats;
-    if (all_particles_have_map_) {
-      normalized_stats = scoreParticles(scoring_beams);
-    } else {
-      const double equal_weight = 1.0 / static_cast<double>(particles_.size());
-      for (auto & particle : particles_) {
-        particle.weight = equal_weight;
-      }
-      normalized_stats.effective_particle_count =
-        static_cast<double>(particles_.size());
+    const auto update = fast_slam_.update(*msg, last_accepted_odom_pose_, scan_odom_pose);
+    if (!update.updated) {
+      return;
     }
 
-    const std::size_t best_index = bestParticleIndex();
-    const double best_weight = particles_[best_index].weight;
-    const double best_log_ll = particles_[best_index].log_likelihood;
-
-    const std::size_t pre_select_id = published_particle_id_;
-    std::size_t published_index = selectPublishedParticleIndex(best_index);
-    const bool particle_switched = (published_particle_id_ != pre_select_id);
-
-    const bool resampled = shouldResample(normalized_stats.effective_particle_count);
-    if (resampled) {
-      const std::size_t pre_resample_id = particles_[published_index].id;
-      resampleParticles(pre_resample_id);
-      const std::size_t post_resample_index = findParticleById(pre_resample_id);
-      published_index =
-        (post_resample_index < particles_.size()) ? post_resample_index : bestParticleIndex();
-      published_particle_id_ = particles_[published_index].id;
-    }
-
-    std::vector<int> newly_occupied;
-    std::vector<int> newly_freed;
-
-    for (auto & particle : particles_) {
-      Particle::TrajectoryPose trajectory_pose;
-      trajectory_pose.pose = particle.pose;
-      trajectory_pose.stamp = msg->header.stamp;
-      particle.trajectory.push_back(trajectory_pose);
-      if (particle.trajectory.size() > settings_.traj_max_poses) {
-        particle.trajectory.pop_front();
-      }
-
-      const double cos_p = std::cos(particle.pose.theta);
-      const double sin_p = std::sin(particle.pose.theta);
-      const double map_laser_x =
-        particle.pose.x + laser_offset_.x * cos_p - laser_offset_.y * sin_p;
-      const double map_laser_y =
-        particle.pose.y + laser_offset_.x * sin_p + laser_offset_.y * cos_p;
-      const double map_laser_theta = particle.pose.theta + laser_offset_.theta;
-      particle.mapper.updateWithScan(*msg, map_laser_x, map_laser_y, map_laser_theta);
-
-      particle.mapper.getAndClearChanges(newly_occupied, newly_freed);
-      particle.likelihood_field.incrementalUpdate(
-        particle.mapper, settings_.likelihood_max_distance, settings_.likelihood_sigma,
-        newly_occupied, newly_freed, settings_.freed_cells_rebuild_threshold);
-      particle.has_map = true;
-    }
-
-    all_particles_have_map_ = true;
-
-    publishState(published_index, msg->header.stamp, scan_odom_pose);
+    publishState(update.published_index, msg->header.stamp, scan_odom_pose);
     last_accepted_odom_pose_ = scan_odom_pose;
 
     RCLCPP_INFO_THROTTLE(
@@ -689,24 +273,12 @@ private:
       *get_clock(),
       2000,
       "N_eff=%.1f best_w=%.2f best_ll=%.1f resampled=%s particle_switched=%s published=%zu",
-      normalized_stats.effective_particle_count,
-      best_weight,
-      best_log_ll,
-      resampled ? "yes" : "no",
-      particle_switched ? "yes" : "no",
-      published_index);
-  }
-
-  bool shouldAcceptUpdate(const Pose2D & current_odom_pose) const
-  {
-    const double dx = current_odom_pose.x - last_accepted_odom_pose_.x;
-    const double dy = current_odom_pose.y - last_accepted_odom_pose_.y;
-    const double translation = std::hypot(dx, dy);
-    const double rotation = std::abs(
-      normalizeAngle(current_odom_pose.theta - last_accepted_odom_pose_.theta));
-
-    return translation >= settings_.min_translation_for_update ||
-           rotation >= settings_.min_rotation_for_update;
+      update.stats.effective_particle_count,
+      update.best_weight,
+      update.best_log_likelihood,
+      update.resampled ? "yes" : "no",
+      update.particle_switched ? "yes" : "no",
+      update.published_index);
   }
 
   void pruneOdomBuffer(const rclcpp::Time & newest_stamp)
@@ -769,466 +341,26 @@ private:
     return false;
   }
 
-  void propagateParticles(const Pose2D & old_pose, const Pose2D & new_pose)
-  {
-    double delta_rot1 = 0.0;
-    const double delta_x = new_pose.x - old_pose.x;
-    const double delta_y = new_pose.y - old_pose.y;
-    const double delta_trans = std::hypot(delta_x, delta_y);
-    if (delta_trans > 1e-6) {
-      delta_rot1 = normalizeAngle(std::atan2(delta_y, delta_x) - old_pose.theta);
-    }
-    const double delta_rot2 = normalizeAngle(new_pose.theta - old_pose.theta - delta_rot1);
-
-    const double total_rotation = std::abs(delta_rot1) + std::abs(delta_rot2);
-    const double trans_noise_std =
-      settings_.translation_noise_from_translation * delta_trans +
-      settings_.translation_noise_from_rotation * total_rotation +
-      settings_.translation_noise_base;
-    const double rot1_noise_std =
-      settings_.rotation_noise_from_rotation * std::abs(delta_rot1) +
-      settings_.rotation_noise_from_translation * delta_trans +
-      settings_.rotation_noise_base;
-    const double rot2_noise_std =
-      settings_.rotation_noise_from_rotation * std::abs(delta_rot2) +
-      settings_.rotation_noise_from_translation * delta_trans +
-      settings_.rotation_noise_base;
-
-    std::normal_distribution<double> trans_noise(0.0, trans_noise_std);
-    std::normal_distribution<double> rot1_noise(0.0, rot1_noise_std);
-    std::normal_distribution<double> rot2_noise(0.0, rot2_noise_std);
-
-    for (auto & particle : particles_) {
-      const double noisy_rot1 = delta_rot1 + rot1_noise(rng_);
-      const double noisy_trans = delta_trans + trans_noise(rng_);
-      const double noisy_rot2 = delta_rot2 + rot2_noise(rng_);
-
-      particle.pose.x += noisy_trans * std::cos(particle.pose.theta + noisy_rot1);
-      particle.pose.y += noisy_trans * std::sin(particle.pose.theta + noisy_rot1);
-      particle.pose.theta = normalizeAngle(particle.pose.theta + noisy_rot1 + noisy_rot2);
-    }
-  }
-
-  std::vector<CachedScanBeam> buildScoringBeams(const sensor_msgs::msg::LaserScan & scan) const
-  {
-    std::vector<CachedScanBeam> beams;
-    beams.reserve((scan.ranges.size() + settings_.scan_beam_step - 1U) / settings_.scan_beam_step);
-
-    for (std::size_t i = 0; i < scan.ranges.size(); i += settings_.scan_beam_step) {
-      const float range = scan.ranges[i];
-      if (std::isnan(range) || range < scan.range_min) {
-        continue;
-      }
-
-      bool endpoint_is_hit = false;
-      double scoring_range = scan.range_max;
-      if (std::isfinite(range)) {
-        scoring_range = std::min(static_cast<double>(range), static_cast<double>(scan.range_max));
-        endpoint_is_hit = range < scan.range_max;
-      } else {
-        continue;  // -inf or any non-finite, non-nan value: skip
-      }
-
-      if (scoring_range <= scan.range_min) {
-        continue;
-      }
-
-      const double beam_angle = scan.angle_min + static_cast<double>(i) * scan.angle_increment;
-      beams.push_back(
-        CachedScanBeam{
-          scoring_range,
-          std::cos(beam_angle),
-          std::sin(beam_angle),
-          endpoint_is_hit});
-    }
-
-    return beams;
-  }
-
-  ParticleStats scoreParticles(const std::vector<CachedScanBeam> & scoring_beams)
-  {
-    ParticleStats stats;
-    stats.raw_scores.resize(particles_.size(), 0.0);
-    stats.normalized_scores.resize(particles_.size(), 0.0);
-    constexpr double kMinBeamLikelihood = 1e-9;
-    const double invalid_log_likelihood = -std::numeric_limits<double>::infinity();
-    double max_log_likelihood = invalid_log_likelihood;
-    for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-      auto & particle = particles_[particle_index];
-      if (!particle.has_map || !particle.likelihood_field.hasMap()) {
-        particle.weight = 0.0;
-        particle.log_likelihood = invalid_log_likelihood;
-        stats.raw_scores[particle_index] = invalid_log_likelihood;
-        continue;
-      }
-
-      double log_likelihood = 0.0;
-      const double cos_theta = std::cos(particle.pose.theta);
-      const double sin_theta = std::sin(particle.pose.theta);
-
-      const double laser_x =
-        particle.pose.x + laser_offset_.x * cos_theta - laser_offset_.y * sin_theta;
-      const double laser_y =
-        particle.pose.y + laser_offset_.x * sin_theta + laser_offset_.y * cos_theta;
-      const double laser_theta = particle.pose.theta + laser_offset_.theta;
-      const double cos_laser = std::cos(laser_theta);
-      const double sin_laser = std::sin(laser_theta);
-
-      for (const auto & beam : scoring_beams) {
-        const double beam_world_cos = cos_laser * beam.cos_angle - sin_laser * beam.sin_angle;
-        const double beam_world_sin = sin_laser * beam.cos_angle + cos_laser * beam.sin_angle;
-        const double hit_x = laser_x + beam.range * beam_world_cos;
-        const double hit_y = laser_y + beam.range * beam_world_sin;
-        if (beam.endpoint_is_hit) {
-          const double beam_score = particle.likelihood_field.valueAtWorld(hit_x, hit_y);
-          log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
-        } else {
-          log_likelihood += freeSpaceBeamReward(
-            particle.mapper, laser_x, laser_y, beam_world_cos, beam_world_sin);
-        }
-        log_likelihood -= rayCrossingPenalty(
-          particle.mapper,
-          laser_x,
-          laser_y,
-          hit_x,
-          hit_y,
-          beam.endpoint_is_hit);
-      }
-
-      if (scoring_beams.empty()) {
-        log_likelihood = invalid_log_likelihood;
-      }
-
-      particle.weight = 0.0;
-      particle.log_likelihood = log_likelihood;
-      stats.raw_scores[particle_index] = log_likelihood;
-      if (std::isfinite(log_likelihood)) {
-        max_log_likelihood = std::max(max_log_likelihood, log_likelihood);
-      }
-    }
-
-    // Helper: compute N_eff = 1/sum(w^2) from current particle weights.
-    auto computeNeff = [&]() {
-      double w2 = 0.0;
-      for (const auto & p : particles_) {
-        w2 += p.weight * p.weight;
-      }
-      return (w2 > 0.0 && std::isfinite(w2)) ? 1.0 / w2 : 0.0;
-    };
-
-    if (!std::isfinite(max_log_likelihood)) {
-      const double equal_weight = 1.0 / static_cast<double>(particles_.size());
-      for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-        auto & particle = particles_[particle_index];
-        particle.weight = equal_weight;
-        stats.normalized_scores[particle_index] = equal_weight;
-      }
-      stats.effective_particle_count = static_cast<double>(particles_.size());
-      return stats;
-    }
-
-    double weight_sum = 0.0;
-    for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-      auto & particle = particles_[particle_index];
-      const double log_likelihood = stats.raw_scores[particle_index];
-      if (std::isfinite(log_likelihood)) {
-        particle.weight = std::exp(log_likelihood - max_log_likelihood);
-        weight_sum += particle.weight;
-      } else {
-        particle.weight = 0.0;
-      }
-    }
-
-    if (weight_sum <= 0.0 || !std::isfinite(weight_sum)) {
-      const double equal_weight = 1.0 / static_cast<double>(particles_.size());
-      for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-        auto & particle = particles_[particle_index];
-        particle.weight = equal_weight;
-        stats.normalized_scores[particle_index] = equal_weight;
-      }
-      stats.effective_particle_count = static_cast<double>(particles_.size());
-      return stats;
-    }
-
-    for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-      auto & particle = particles_[particle_index];
-      particle.weight /= weight_sum;
-      stats.normalized_scores[particle_index] = particle.weight;
-    }
-
-    stats.effective_particle_count = computeNeff();
-    return stats;
-  }
-
-  double rayCrossingPenalty(
-    const OccupancyMapper & mapper,
-    double start_x,
-    double start_y,
-    double end_x,
-    double end_y,
-    bool endpoint_is_hit) const
-  {
-    const auto & log_odds = mapper.getLogOdds();
-    if (log_odds.empty()) {
-      return 0.0;
-    }
-
-    int start_cell_x = 0;
-    int start_cell_y = 0;
-    if (!mapper.worldToGrid(start_x, start_y, start_cell_x, start_cell_y)) {
-      return 0.0;
-    }
-
-    int end_cell_x = 0;
-    int end_cell_y = 0;
-    if (!mapper.worldToGrid(end_x, end_y, end_cell_x, end_cell_y)) {
-      return 0.0;
-    }
-
-    const auto cells = bresenhamLine(start_cell_x, start_cell_y, end_cell_x, end_cell_y);
-    if (cells.size() <= 1U) {
-      return 0.0;
-    }
-
-    std::size_t end_exclusive = cells.size();
-    if (endpoint_is_hit) {
-      end_exclusive = settings_.ray_endpoint_margin_cells >= end_exclusive ?
-        1U :
-        end_exclusive - settings_.ray_endpoint_margin_cells;
-    }
-
-    const int width = mapper.getConfig().width;
-    // Convert probability threshold to log-odds once per call.
-    const double p = settings_.ray_occupied_threshold / 100.0;
-    const double lo_threshold = std::log(p / (1.0 - p));
-
-    double penalty = 0.0;
-    bool inside_occupied_run = false;
-    for (std::size_t i = 1; i < end_exclusive; ++i) {
-      if (!mapper.isValidCell(cells[i].x, cells[i].y)) {
-        continue;
-      }
-      const int index = cells[i].y * width + cells[i].x;
-      const bool occupied = log_odds[static_cast<std::size_t>(index)] >= lo_threshold;
-
-      if (occupied && !inside_occupied_run) {
-        penalty += settings_.ray_occupied_crossing_penalty;
-        inside_occupied_run = true;
-        if (penalty >= settings_.ray_penalty_max_per_beam) {
-          return settings_.ray_penalty_max_per_beam;
-        }
-      } else if (!occupied) {
-        inside_occupied_run = false;
-      }
-    }
-
-    return penalty;
-  }
-
-  double freeSpaceBeamReward(
-    const OccupancyMapper & mapper,
-    double start_x,
-    double start_y,
-    double beam_world_cos,
-    double beam_world_sin) const
-  {
-    if (settings_.free_space_reward_per_cell <= 0.0) {
-      return 0.0;
-    }
-
-    const auto & log_odds = mapper.getLogOdds();
-    if (log_odds.empty()) {
-      return 0.0;
-    }
-
-    int cx = 0;
-    int cy = 0;
-    if (!mapper.worldToGrid(start_x, start_y, cx, cy)) {
-      return 0.0;
-    }
-
-    const auto & cfg = mapper.getConfig();
-    const double res = cfg.resolution;
-    const int max_steps = cfg.width + cfg.height;
-    double reward = 0.0;
-
-    for (int step = 1; step <= max_steps; ++step) {
-      const double wx = start_x + step * res * beam_world_cos;
-      const double wy = start_y + step * res * beam_world_sin;
-      int cell_x = 0;
-      int cell_y = 0;
-      if (!mapper.worldToGrid(wx, wy, cell_x, cell_y)) {
-        break;
-      }
-      const int index = cell_y * cfg.width + cell_x;
-      const double lo = log_odds[static_cast<std::size_t>(index)];
-      if (lo < 0.0) {
-        // Observed free cell — reward it.
-        reward += settings_.free_space_reward_per_cell;
-      } else {
-        // Occupied or unobserved (lo >= 0) — stop traversal.
-        break;
-      }
-    }
-
-    return reward;
-  }
-
-  std::size_t bestParticleIndex() const
-  {
-    return static_cast<std::size_t>(std::distance(
-             particles_.begin(),
-             std::max_element(
-               particles_.begin(),
-               particles_.end(),
-               [](const Particle & lhs, const Particle & rhs) {return lhs.weight < rhs.weight;})));
-  }
-
-  std::size_t findParticleById(std::size_t id) const
-  {
-    const auto iterator = std::find_if(
-      particles_.begin(),
-      particles_.end(),
-      [id](const Particle & particle) {return particle.id == id;});
-    if (iterator == particles_.end()) {
-      return particles_.size();
-    }
-
-    return static_cast<std::size_t>(std::distance(particles_.begin(), iterator));
-  }
-
-  std::size_t selectPublishedParticleIndex(std::size_t best_index)
-  {
-    if (particles_.empty()) {
-      return 0U;
-    }
-
-    const std::size_t current_index = findParticleById(published_particle_id_);
-    if (current_index >= particles_.size() || !particles_[current_index].has_map) {
-      published_particle_id_ = particles_[best_index].id;
-      leading_particle_id_ = kInvalidParticleId;
-      leading_wins_ = 0;
-      return best_index;
-    }
-
-    // Published particle is still best — reset the challenger streak.
-    if (best_index == current_index) {
-      leading_particle_id_ = kInvalidParticleId;
-      leading_wins_ = 0;
-      return current_index;
-    }
-
-    // A different particle is ahead — track its consecutive-win streak.
-    const std::size_t best_id = particles_[best_index].id;
-    if (best_id == leading_particle_id_) {
-      ++leading_wins_;
-    } else {
-      leading_particle_id_ = best_id;
-      leading_wins_ = 1;
-    }
-
-    // Switch only when streak AND weight-ratio thresholds are both met.
-    const double published_weight = particles_[current_index].weight;
-    const double best_weight = particles_[best_index].weight;
-    if (leading_wins_ >= settings_.consecutive_wins_to_switch &&
-      best_weight >= settings_.switch_weight_ratio * published_weight)
-    {
-      RCLCPP_INFO(
-        get_logger(),
-        "Switching published particle: %zu -> %zu (streak=%d, weight ratio=%.2f)",
-        published_particle_id_, best_id,
-        leading_wins_,
-        published_weight > 0.0 ? best_weight / published_weight : 0.0);
-      published_particle_id_ = best_id;
-      leading_particle_id_ = kInvalidParticleId;
-      leading_wins_ = 0;
-      return best_index;
-    }
-
-    return current_index;
-  }
-
-  bool shouldResample(double effective_particle_count) const
-  {
-    if (effective_particle_count <= 0.0 || !std::isfinite(effective_particle_count)) {
-      return false;
-    }
-    return effective_particle_count <
-           (settings_.resample_min_eff_ratio * static_cast<double>(particles_.size()));
-  }
-
-  void resampleParticles(std::size_t preserved_particle_id)
-  {
-    double weight_sum = 0.0;
-    for (const auto & particle : particles_) {
-      weight_sum += particle.weight;
-    }
-
-    if (weight_sum <= 0.0 || !std::isfinite(weight_sum)) {
-      const double equal_weight = 1.0 / static_cast<double>(particles_.size());
-      for (auto & particle : particles_) {
-        particle.weight = equal_weight;
-      }
-      weight_sum = 1.0;
-    }
-
-    std::vector<double> cumulative_weights;
-    cumulative_weights.reserve(particles_.size());
-    double cumulative_sum = 0.0;
-    for (auto & particle : particles_) {
-      particle.weight /= weight_sum;
-      cumulative_sum += particle.weight;
-      cumulative_weights.push_back(cumulative_sum);
-    }
-
-    cumulative_weights.back() = 1.0;
-
-    std::uniform_real_distribution<double> start_distribution(
-      0.0, 1.0 / static_cast<double>(particles_.size()));
-
-    std::vector<Particle> new_particles;
-    new_particles.reserve(particles_.size());
-    bool published_id_preserved = false;
-
-    double pointer = start_distribution(rng_);
-    const double step = 1.0 / static_cast<double>(particles_.size());
-    std::size_t particle_index = 0;
-
-    for (std::size_t i = 0; i < particles_.size(); ++i) {
-      while (pointer > cumulative_weights[particle_index]) {
-        particle_index++;
-      }
-
-      Particle copied = particles_[particle_index];
-      if (copied.id == preserved_particle_id && !published_id_preserved) {
-        published_id_preserved = true;
-      } else {
-        copied.id = next_particle_id_++;
-      }
-      copied.weight = 1.0 / static_cast<double>(particles_.size());
-      new_particles.push_back(std::move(copied));
-      pointer += step;
-    }
-
-    particles_ = std::move(new_particles);
-  }
-
   void publishState(
     std::size_t best_index,
     const builtin_interfaces::msg::Time & stamp,
     const Pose2D & odom_pose_at_stamp)
   {
-    const Particle & best_particle = particles_[best_index];
+    const auto & particles = fast_slam_.particles();
+    if (best_index >= particles.size()) {
+      return;
+    }
+
+    const auto & best_particle = particles[best_index];
     if (best_particle.has_map) {
-      map_pub_->publish(
-        best_particle.mapper.buildOccupancyGridMsg("map", stamp));
+      map_pub_->publish(best_particle.mapper.buildOccupancyGridMsg("map", stamp));
     }
 
     geometry_msgs::msg::PoseArray particle_cloud;
     particle_cloud.header.frame_id = "map";
     particle_cloud.header.stamp = stamp;
-    particle_cloud.poses.reserve(particles_.size());
-    for (const auto & particle : particles_) {
+    particle_cloud.poses.reserve(particles.size());
+    for (const auto & particle : particles) {
       geometry_msgs::msg::Pose pose;
       pose.position.x = particle.pose.x;
       pose.position.y = particle.pose.y;
@@ -1292,23 +424,17 @@ private:
     tf_broadcaster_->sendTransform(msg);
   }
 
-  Settings settings_{};
-  std::default_random_engine rng_{std::random_device{}()};
-  static constexpr std::size_t kInvalidParticleId = std::numeric_limits<std::size_t>::max();
-
+  FastSlamParameters parameters_{};
   OccupancyMapper::Config map_config_{};
-
-  std::vector<Particle> particles_{};
-  std::size_t next_particle_id_{0U};
-  std::size_t published_particle_id_{kInvalidParticleId};
-  std::size_t leading_particle_id_{kInvalidParticleId};
-  int leading_wins_{0};
-  bool all_particles_have_map_{false};
+  FastSlam fast_slam_{};
 
   std::deque<OdomSample> odom_buffer_{};
   Pose2D last_accepted_odom_pose_{};
   bool have_odom_{false};
   bool have_last_accepted_odom_{false};
+  Pose2D laser_offset_{};
+  bool laser_offset_known_{false};
+
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_pub_;
@@ -1318,8 +444,6 @@ private:
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-  Pose2D laser_offset_{};
-  bool laser_offset_known_{false};
 };
 
 }  // namespace
