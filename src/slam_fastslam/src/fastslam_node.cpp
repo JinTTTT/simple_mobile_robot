@@ -254,9 +254,19 @@ private:
       return;
     }
 
+    const auto t0 = std::chrono::steady_clock::now();
+
     const auto update = fast_slam_.update(*msg, last_update_odom_pose_, scan_odom_pose);
     publishState(update.selected_particle_index, msg->header.stamp, scan_odom_pose);
     last_update_odom_pose_ = scan_odom_pose;
+
+    const auto t1 = std::chrono::steady_clock::now();
+    const double update_duration_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    RCLCPP_INFO(
+      get_logger(),
+      "Scan update took %.1f ms.",
+      update_duration_ms
+    );
 
     RCLCPP_INFO_THROTTLE(
       get_logger(),
