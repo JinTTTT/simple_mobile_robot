@@ -217,6 +217,26 @@ FastSlamParticleStats FastSlam::scoreParticles(
       return (w2 > 0.0 && std::isfinite(w2)) ? 1.0 / w2 : 0.0;
     };
 
+  // Compute summary statistics from the raw log-likelihoods now that the
+  // scoring loop is complete.
+  {
+    double min_ll = std::numeric_limits<double>::infinity();
+    double sum_ll = 0.0;
+    int finite_count = 0;
+    for (const double s : stats.raw_scores) {
+      if (std::isfinite(s)) {
+        min_ll = std::min(min_ll, s);
+        sum_ll += s;
+        ++finite_count;
+      }
+    }
+    const double no_val = -std::numeric_limits<double>::infinity();
+    stats.best_score = std::isfinite(max_log_likelihood) ? max_log_likelihood : no_val;
+    stats.min_score = (finite_count > 0) ? min_ll : no_val;
+    stats.average_score =
+      (finite_count > 0) ? sum_ll / static_cast<double>(finite_count) : no_val;
+  }
+
   if (!std::isfinite(max_log_likelihood)) {
     const double equal_weight = 1.0 / static_cast<double>(particles_.size());
     for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {

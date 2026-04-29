@@ -78,6 +78,11 @@ std::vector<CachedScanBeam> ScanScorer::buildScoringBeams(
     if (std::isfinite(range)) {
       scoring_range = std::min(static_cast<double>(range), static_cast<double>(scan.range_max));
       endpoint_is_hit = range < scan.range_max;
+    } else if (std::isinf(range) && range > 0.0f) {
+      // Positive infinity means the beam reached max range without hitting anything.
+      // Treat it as a max-range free-space beam (no obstacle at the endpoint).
+      scoring_range = static_cast<double>(scan.range_max);
+      endpoint_is_hit = false;
     } else {
       continue;
     }
@@ -131,8 +136,7 @@ double ScanScorer::scoreParticle(
       const double beam_score = likelihood_field.valueAtWorld(hit_x, hit_y);
       log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
     } else {
-      log_likelihood += freeSpaceBeamReward(
-        mapper, laser_x, laser_y, beam_world_cos, beam_world_sin);
+      log_likelihood += freeSpaceBeamReward(mapper, laser_x, laser_y, hit_x, hit_y);
     }
     log_likelihood -= rayCrossingPenalty(
       mapper,
@@ -216,8 +220,8 @@ double ScanScorer::freeSpaceBeamReward(
   const OccupancyMapper & mapper,
   double start_x,
   double start_y,
-  double beam_world_cos,
-  double beam_world_sin) const
+  double end_x,
+  double end_y) const
 {
   if (options_.free_space_reward_per_cell <= 0.0) {
     return 0.0;
@@ -228,31 +232,65 @@ double ScanScorer::freeSpaceBeamReward(
     return 0.0;
   }
 
-  int cx = 0;
-  int cy = 0;
-  if (!mapper.worldToGrid(start_x, start_y, cx, cy)) {
+  int start_cx = 0;
+  int start_cy = 0;
+  if (!mapper.worldToGrid(start_x, start_y, start_cx, start_cy)) {
     return 0.0;
   }
 
+  // Clip the endpoint to the map boundary while preserving beam direction, so
+  // that Bresenham walks the correct path even when the beam exits the map.
+  // Independent axis clamping would distort the angle; parametric clipping fixes that.
   const auto & cfg = mapper.getConfig();
-  const double res = cfg.resolution;
-  const int max_steps = cfg.width + cfg.height;
+  const double dx = end_x - start_x;
+  const double dy = end_y - start_y;
+  const double beam_length = std::hypot(dx, dy);
+  if (beam_length < 1e-9) {
+    return 0.0;
+  }
+
+  double t_max = 1.0;
+  const double map_min_x = cfg.origin_x;
+  const double map_max_x = cfg.origin_x + cfg.width * cfg.resolution;
+  const double map_min_y = cfg.origin_y;
+  const double map_max_y = cfg.origin_y + cfg.height * cfg.resolution;
+
+  if (dx > 1e-9) {
+    t_max = std::min(t_max, (map_max_x - start_x) / dx);
+  } else if (dx < -1e-9) {
+    t_max = std::min(t_max, (map_min_x - start_x) / dx);
+  }
+  if (dy > 1e-9) {
+    t_max = std::min(t_max, (map_max_y - start_y) / dy);
+  } else if (dy < -1e-9) {
+    t_max = std::min(t_max, (map_min_y - start_y) / dy);
+  }
+
+  const double clipped_x = start_x + t_max * dx;
+  const double clipped_y = start_y + t_max * dy;
+  const int end_cx = std::clamp(
+    static_cast<int>(std::floor((clipped_x - cfg.origin_x) / cfg.resolution)),
+    0, cfg.width - 1);
+  const int end_cy = std::clamp(
+    static_cast<int>(std::floor((clipped_y - cfg.origin_y) / cfg.resolution)),
+    0, cfg.height - 1);
+
+  const auto cells = bresenhamLine(start_cx, start_cy, end_cx, end_cy);
+
+  const int width = cfg.width;
   double reward = 0.0;
 
-  for (int step = 1; step <= max_steps; ++step) {
-    const double wx = start_x + step * res * beam_world_cos;
-    const double wy = start_y + step * res * beam_world_sin;
-    int cell_x = 0;
-    int cell_y = 0;
-    if (!mapper.worldToGrid(wx, wy, cell_x, cell_y)) {
+  // Start from index 1 to skip the laser-origin cell itself.
+  for (std::size_t i = 1; i < cells.size(); ++i) {
+    if (!mapper.isValidCell(cells[i].x, cells[i].y)) {
       break;
     }
-    const int index = cell_y * cfg.width + cell_x;
+    const int index = cells[i].y * width + cells[i].x;
     const double lo = log_odds[static_cast<std::size_t>(index)];
     if (lo < 0.0) {
       reward += options_.free_space_reward_per_cell;
     } else {
-      break;
+      break;  // stop at occupied or unknown cells
     }
   }
 

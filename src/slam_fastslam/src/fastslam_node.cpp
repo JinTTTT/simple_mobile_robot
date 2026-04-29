@@ -90,6 +90,25 @@ private:
       declare_parameter<int>("scan_beam_step", static_cast<int>(parameters_.scan_beam_step)));
     parameters_.scan_beam_step = static_cast<std::size_t>(std::max(1, scan_beam_step));
 
+    parameters_.ray_occupied_threshold = std::max(
+      0,
+      static_cast<int>(
+        declare_parameter<int>("ray_occupied_threshold", parameters_.ray_occupied_threshold)));
+    parameters_.ray_occupied_crossing_penalty = std::max(
+      0.0,
+      declare_parameter<double>(
+        "ray_occupied_crossing_penalty", parameters_.ray_occupied_crossing_penalty));
+    parameters_.ray_penalty_max_per_beam = std::max(
+      0.0,
+      declare_parameter<double>("ray_penalty_max_per_beam", parameters_.ray_penalty_max_per_beam));
+
+    const int ray_endpoint_margin_cells = static_cast<int>(
+      declare_parameter<int>(
+        "ray_endpoint_margin_cells",
+        static_cast<int>(parameters_.ray_endpoint_margin_cells)));
+    parameters_.ray_endpoint_margin_cells =
+      static_cast<std::size_t>(std::max(0, ray_endpoint_margin_cells));
+
     parameters_.likelihood_max_distance = std::max(
       0.01,
       declare_parameter<double>("likelihood_max_distance", parameters_.likelihood_max_distance));

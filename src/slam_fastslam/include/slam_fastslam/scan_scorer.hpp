@@ -59,8 +59,8 @@ private:
     const OccupancyMapper & mapper,
     double start_x,
     double start_y,
-    double beam_world_cos,
-    double beam_world_sin) const;
+    double end_x,
+    double end_y) const;
 
   ScanScorerOptions options_{};
 };

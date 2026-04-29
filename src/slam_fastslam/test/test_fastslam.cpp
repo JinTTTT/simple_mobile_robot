@@ -147,3 +147,36 @@ TEST(FastSlamTest, TrajectoryGrowsAndIsTrimmedToConfiguredLimit)
     EXPECT_EQ(particle.trajectory.size(), 2U);
   }
 }
+
+TEST(FastSlamTest, UpdateResultStatsArePopulatedAfterFirstMapExists)
+{
+  // After the first scan update builds a map, subsequent updates should fill
+  // best_score, min_score, and average_score with finite values.
+  slam_fastslam::FastSlamParameters parameters = makeParameters();
+  parameters.translation_noise_from_translation = 0.0;
+  parameters.translation_noise_from_rotation = 0.0;
+  parameters.translation_noise_base = 0.0;
+  parameters.rotation_noise_from_rotation = 0.0;
+  parameters.rotation_noise_from_translation = 0.0;
+  parameters.rotation_noise_base = 0.0;
+  slam_fastslam::FastSlam slam(parameters, makeMapConfig());
+
+  const auto scan = makeSingleBeamScan(1.0);
+  const slam_fastslam::Pose2D pose0{0.0, 0.0, 0.0};
+  const slam_fastslam::Pose2D pose1{0.2, 0.0, 0.0};
+  const slam_fastslam::Pose2D pose2{0.4, 0.0, 0.0};
+
+  // First update builds the map but has no prior map to score against,
+  // so stats are not populated yet.
+  slam.update(scan, pose0, pose1);
+
+  // Second update scores particles against their just-built maps.
+  const auto result = slam.update(scan, pose1, pose2);
+  ASSERT_TRUE(result.updated);
+
+  EXPECT_TRUE(std::isfinite(result.stats.best_score));
+  EXPECT_TRUE(std::isfinite(result.stats.min_score));
+  EXPECT_TRUE(std::isfinite(result.stats.average_score));
+  EXPECT_GE(result.stats.best_score, result.stats.average_score);
+  EXPECT_GE(result.stats.average_score, result.stats.min_score);
+}
