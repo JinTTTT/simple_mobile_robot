@@ -49,6 +49,45 @@ std::vector<GridCell> bresenhamLine(int x0, int y0, int x1, int y1)
   return cells;
 }
 
+// Clips the beam endpoint to the map boundary along the start→end ray.
+// Writes the nearest in-map grid cell into end_cx/end_cy.
+// Returns false if the direction vector is degenerate (start ≈ end).
+bool clipBeamEndToMap(
+  const OccupancyMapper::Config & cfg,
+  double start_x, double start_y,
+  double end_x, double end_y,
+  int & end_cx, int & end_cy)
+{
+  const double dx = end_x - start_x;
+  const double dy = end_y - start_y;
+  if (std::hypot(dx, dy) < 1e-9) {
+    return false;
+  }
+
+  double t = 1.0;
+  const double map_max_x = cfg.origin_x + cfg.width * cfg.resolution;
+  const double map_max_y = cfg.origin_y + cfg.height * cfg.resolution;
+
+  if (dx > 1e-9) {
+    t = std::min(t, (map_max_x - start_x) / dx);
+  } else if (dx < -1e-9) {
+    t = std::min(t, (cfg.origin_x - start_x) / dx);
+  }
+  if (dy > 1e-9) {
+    t = std::min(t, (map_max_y - start_y) / dy);
+  } else if (dy < -1e-9) {
+    t = std::min(t, (cfg.origin_y - start_y) / dy);
+  }
+
+  end_cx = std::clamp(
+    static_cast<int>(std::floor((start_x + t * dx - cfg.origin_x) / cfg.resolution)),
+    0, cfg.width - 1);
+  end_cy = std::clamp(
+    static_cast<int>(std::floor((start_y + t * dy - cfg.origin_y) / cfg.resolution)),
+    0, cfg.height - 1);
+  return true;
+}
+
 }  // namespace
 
 ScanScorer::ScanScorer(const ScanScorerOptions & options)
@@ -171,8 +210,16 @@ double ScanScorer::rayCrossingPenalty(
 
   int end_cell_x = 0;
   int end_cell_y = 0;
+  bool endpoint_clipped = false;
   if (!mapper.worldToGrid(end_x, end_y, end_cell_x, end_cell_y)) {
-    return 0.0;
+    // Beam exits the map; clip to the boundary so occupied crossings along the
+    // in-map portion of the ray are still penalized.
+    if (!clipBeamEndToMap(
+        mapper.getConfig(), start_x, start_y, end_x, end_y, end_cell_x, end_cell_y))
+    {
+      return 0.0;
+    }
+    endpoint_clipped = true;
   }
 
   const auto cells = bresenhamLine(start_cell_x, start_cell_y, end_cell_x, end_cell_y);
@@ -180,8 +227,10 @@ double ScanScorer::rayCrossingPenalty(
     return 0.0;
   }
 
+  // When the endpoint was clipped to the map boundary there is no real obstacle
+  // there, so skip the endpoint margin (treat as if endpoint_is_hit = false).
   std::size_t end_exclusive = cells.size();
-  if (endpoint_is_hit) {
+  if (endpoint_is_hit && !endpoint_clipped) {
     end_exclusive = options_.ray_endpoint_margin_cells >= end_exclusive ?
       1U :
       end_exclusive - options_.ray_endpoint_margin_cells;
@@ -238,46 +287,21 @@ double ScanScorer::freeSpaceBeamReward(
     return 0.0;
   }
 
-  // Clip the endpoint to the map boundary while preserving beam direction, so
-  // that Bresenham walks the correct path even when the beam exits the map.
-  // Independent axis clamping would distort the angle; parametric clipping fixes that.
-  const auto & cfg = mapper.getConfig();
-  const double dx = end_x - start_x;
-  const double dy = end_y - start_y;
-  const double beam_length = std::hypot(dx, dy);
-  if (beam_length < 1e-9) {
-    return 0.0;
+  // Clip the endpoint to the map boundary (preserving direction) so Bresenham
+  // walks correctly even when the beam exits the map.
+  int end_cx = 0;
+  int end_cy = 0;
+  if (!mapper.worldToGrid(end_x, end_y, end_cx, end_cy)) {
+    if (!clipBeamEndToMap(
+        mapper.getConfig(), start_x, start_y, end_x, end_y, end_cx, end_cy))
+    {
+      return 0.0;
+    }
   }
-
-  double t_max = 1.0;
-  const double map_min_x = cfg.origin_x;
-  const double map_max_x = cfg.origin_x + cfg.width * cfg.resolution;
-  const double map_min_y = cfg.origin_y;
-  const double map_max_y = cfg.origin_y + cfg.height * cfg.resolution;
-
-  if (dx > 1e-9) {
-    t_max = std::min(t_max, (map_max_x - start_x) / dx);
-  } else if (dx < -1e-9) {
-    t_max = std::min(t_max, (map_min_x - start_x) / dx);
-  }
-  if (dy > 1e-9) {
-    t_max = std::min(t_max, (map_max_y - start_y) / dy);
-  } else if (dy < -1e-9) {
-    t_max = std::min(t_max, (map_min_y - start_y) / dy);
-  }
-
-  const double clipped_x = start_x + t_max * dx;
-  const double clipped_y = start_y + t_max * dy;
-  const int end_cx = std::clamp(
-    static_cast<int>(std::floor((clipped_x - cfg.origin_x) / cfg.resolution)),
-    0, cfg.width - 1);
-  const int end_cy = std::clamp(
-    static_cast<int>(std::floor((clipped_y - cfg.origin_y) / cfg.resolution)),
-    0, cfg.height - 1);
 
   const auto cells = bresenhamLine(start_cx, start_cy, end_cx, end_cy);
 
-  const int width = cfg.width;
+  const int width = mapper.getConfig().width;
   double reward = 0.0;
 
   // Start from index 1 to skip the laser-origin cell itself.

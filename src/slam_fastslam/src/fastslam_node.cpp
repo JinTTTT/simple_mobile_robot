@@ -194,7 +194,6 @@ private:
     const rclcpp::Time odom_stamp(msg->header.stamp);
     odom_buffer_.push_back(OdomSample{odom_stamp, odom_pose});
     pruneOdomBuffer(odom_stamp);
-    have_odom_ = true;
 
     if (!have_last_update_odom_) {
       last_update_odom_pose_ = odom_pose;
@@ -235,7 +234,7 @@ private:
 
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
   {
-    if (!have_odom_ || !have_last_update_odom_) {
+    if (!have_last_update_odom_) {
       return;
     }
 
@@ -256,10 +255,6 @@ private:
     }
 
     const auto update = fast_slam_.update(*msg, last_update_odom_pose_, scan_odom_pose);
-    if (!update.updated) {
-      return;
-    }
-
     publishState(update.selected_particle_index, msg->header.stamp, scan_odom_pose);
     last_update_odom_pose_ = scan_odom_pose;
 
@@ -425,7 +420,6 @@ private:
 
   std::deque<OdomSample> odom_buffer_{};
   Pose2D last_update_odom_pose_{};
-  bool have_odom_{false};
   bool have_last_update_odom_{false};
   Pose2D laser_offset_{};
   bool laser_offset_known_{false};

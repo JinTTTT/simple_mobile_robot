@@ -47,8 +47,6 @@ struct FastSlamParticleStats
   double average_score{0.0};
   double min_score{0.0};
   double effective_particle_count{0.0};
-  std::vector<double> raw_scores{};
-  std::vector<double> normalized_scores{};
 };
 
 struct FastSlamUpdateResult
@@ -80,7 +78,6 @@ public:
     const Pose2D & previous_odom_pose,
     const Pose2D & current_odom_pose);
 
-  const FastSlamParameters & parameters() const;
   const std::vector<FastSlamParticle> & particles() const;
 
 private:

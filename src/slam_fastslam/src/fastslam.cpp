@@ -54,11 +54,6 @@ void FastSlam::setLaserOffset(const Pose2D & laser_offset)
   laser_offset_ = laser_offset;
 }
 
-const FastSlamParameters & FastSlam::parameters() const
-{
-  return parameters_;
-}
-
 const std::vector<FastSlamParticle> & FastSlam::particles() const
 {
   return particles_;
@@ -153,6 +148,7 @@ void FastSlam::initializeParticles()
   const double initial_weight = 1.0 / static_cast<double>(parameters_.num_particles);
   next_particle_id_ = 0U;
   selected_particle_id_ = kInvalidParticleId;
+  particles_have_maps_ = false;
   for (auto & particle : particles_) {
     particle.id = next_particle_id_++;
     particle.pose = Pose2D{};
@@ -181,34 +177,49 @@ FastSlamParticleStats FastSlam::scoreParticles(
   const std::vector<CachedScanBeam> & scoring_beams)
 {
   FastSlamParticleStats stats;
-  stats.raw_scores.resize(particles_.size(), 0.0);
-  stats.normalized_scores.resize(particles_.size(), 0.0);
-  const double invalid_log_likelihood = -std::numeric_limits<double>::infinity();
-  double max_log_likelihood = invalid_log_likelihood;
-  for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-    auto & particle = particles_[particle_index];
+  // Scratch buffer for log-likelihoods so the normalization loop doesn't
+  // re-invoke the scorer. Not exposed on the result struct.
+  std::vector<double> raw_scores(particles_.size(), 0.0);
+  const double invalid_ll = -std::numeric_limits<double>::infinity();
+  double max_log_likelihood = invalid_ll;
+
+  for (std::size_t i = 0; i < particles_.size(); ++i) {
+    auto & particle = particles_[i];
     if (!particle.has_map || !particle.likelihood_field.hasMap()) {
       particle.weight = 0.0;
-      particle.log_likelihood = invalid_log_likelihood;
-      stats.raw_scores[particle_index] = invalid_log_likelihood;
+      particle.log_likelihood = invalid_ll;
+      raw_scores[i] = invalid_ll;
       continue;
     }
-
-    const double log_likelihood = scan_scorer_.scoreParticle(
-      scoring_beams,
-      particle.pose,
-      laser_offset_,
-      particle.mapper,
-      particle.likelihood_field);
+    const double ll = scan_scorer_.scoreParticle(
+      scoring_beams, particle.pose, laser_offset_, particle.mapper, particle.likelihood_field);
     particle.weight = 0.0;
-    particle.log_likelihood = log_likelihood;
-    stats.raw_scores[particle_index] = log_likelihood;
-    if (std::isfinite(log_likelihood)) {
-      max_log_likelihood = std::max(max_log_likelihood, log_likelihood);
+    particle.log_likelihood = ll;
+    raw_scores[i] = ll;
+    if (std::isfinite(ll)) {
+      max_log_likelihood = std::max(max_log_likelihood, ll);
     }
   }
 
-  // N_eff estimates how concentrated the particle weights are.
+  // Aggregate statistics from the raw log-likelihoods.
+  {
+    double min_ll = std::numeric_limits<double>::infinity();
+    double sum_ll = 0.0;
+    int finite_count = 0;
+    for (const double s : raw_scores) {
+      if (std::isfinite(s)) {
+        min_ll = std::min(min_ll, s);
+        sum_ll += s;
+        ++finite_count;
+      }
+    }
+    const double no_val = invalid_ll;
+    stats.best_score = std::isfinite(max_log_likelihood) ? max_log_likelihood : no_val;
+    stats.min_score = (finite_count > 0) ? min_ll : no_val;
+    stats.average_score =
+      (finite_count > 0) ? sum_ll / static_cast<double>(finite_count) : no_val;
+  }
+
   auto computeNeff = [&]() {
       double w2 = 0.0;
       for (const auto & p : particles_) {
@@ -217,43 +228,20 @@ FastSlamParticleStats FastSlam::scoreParticles(
       return (w2 > 0.0 && std::isfinite(w2)) ? 1.0 / w2 : 0.0;
     };
 
-  // Compute summary statistics from the raw log-likelihoods now that the
-  // scoring loop is complete.
-  {
-    double min_ll = std::numeric_limits<double>::infinity();
-    double sum_ll = 0.0;
-    int finite_count = 0;
-    for (const double s : stats.raw_scores) {
-      if (std::isfinite(s)) {
-        min_ll = std::min(min_ll, s);
-        sum_ll += s;
-        ++finite_count;
-      }
-    }
-    const double no_val = -std::numeric_limits<double>::infinity();
-    stats.best_score = std::isfinite(max_log_likelihood) ? max_log_likelihood : no_val;
-    stats.min_score = (finite_count > 0) ? min_ll : no_val;
-    stats.average_score =
-      (finite_count > 0) ? sum_ll / static_cast<double>(finite_count) : no_val;
-  }
-
   if (!std::isfinite(max_log_likelihood)) {
     const double equal_weight = 1.0 / static_cast<double>(particles_.size());
-    for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-      auto & particle = particles_[particle_index];
+    for (auto & particle : particles_) {
       particle.weight = equal_weight;
-      stats.normalized_scores[particle_index] = equal_weight;
     }
     stats.effective_particle_count = static_cast<double>(particles_.size());
     return stats;
   }
 
   double weight_sum = 0.0;
-  for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-    auto & particle = particles_[particle_index];
-    const double log_likelihood = stats.raw_scores[particle_index];
-    if (std::isfinite(log_likelihood)) {
-      particle.weight = std::exp(log_likelihood - max_log_likelihood);
+  for (std::size_t i = 0; i < particles_.size(); ++i) {
+    auto & particle = particles_[i];
+    if (std::isfinite(raw_scores[i])) {
+      particle.weight = std::exp(raw_scores[i] - max_log_likelihood);
       weight_sum += particle.weight;
     } else {
       particle.weight = 0.0;
@@ -262,19 +250,15 @@ FastSlamParticleStats FastSlam::scoreParticles(
 
   if (weight_sum <= 0.0 || !std::isfinite(weight_sum)) {
     const double equal_weight = 1.0 / static_cast<double>(particles_.size());
-    for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-      auto & particle = particles_[particle_index];
+    for (auto & particle : particles_) {
       particle.weight = equal_weight;
-      stats.normalized_scores[particle_index] = equal_weight;
     }
     stats.effective_particle_count = static_cast<double>(particles_.size());
     return stats;
   }
 
-  for (std::size_t particle_index = 0; particle_index < particles_.size(); ++particle_index) {
-    auto & particle = particles_[particle_index];
+  for (auto & particle : particles_) {
     particle.weight /= weight_sum;
-    stats.normalized_scores[particle_index] = particle.weight;
   }
 
   stats.effective_particle_count = computeNeff();
