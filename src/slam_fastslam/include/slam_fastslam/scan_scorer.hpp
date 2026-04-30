@@ -21,6 +21,9 @@ struct ScanScorerOptions
   double free_space_reward_per_cell{0.01};
 };
 
+// The scan is unique, from scan(r, theta) to (x, y) need to compuate cos and sin
+// instead of computing cos(theta) and sin(theta) in each particle, we precompute them and store in CachedScanBeam
+// so that we can save a lot of time when scoring particles.
 struct CachedScanBeam
 {
   double range{0.0};

@@ -1,5 +1,4 @@
-#ifndef MAPPING__OCCUPANCY_MAPPER_HPP_
-#define MAPPING__OCCUPANCY_MAPPER_HPP_
+#pragma once
 
 #include "builtin_interfaces/msg/time.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
@@ -78,5 +77,3 @@ private:
   std::vector<int> newly_occupied_;
   std::vector<int> newly_freed_;
 };
-
-#endif  // MAPPING__OCCUPANCY_MAPPER_HPP_
