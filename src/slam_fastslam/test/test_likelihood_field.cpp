@@ -73,15 +73,15 @@ TEST(LikelihoodFieldTest, IncrementalOccupiedUpdateIncreasesLikelihoodNearNewObs
 
   const auto changes = mapper.takeAndClearMapChanges();
 
-  ASSERT_FALSE(changes.newly_occupied.empty());
-  ASSERT_TRUE(changes.newly_freed.empty());
+  ASSERT_FALSE(changes.cells_changed_to_occupied.empty());
+  ASSERT_TRUE(changes.cells_changed_to_free.empty());
 
   field.incrementalUpdate(
     mapper,
     kMaxDistance,
     kSigma,
-    changes.newly_occupied,
-    changes.newly_freed,
+    changes.cells_changed_to_occupied,
+    changes.cells_changed_to_free,
     100U);
 
   EXPECT_NEAR(field.valueAtWorld(2.5, 1.5), before_old_obstacle, 1e-12);
@@ -108,15 +108,15 @@ TEST(LikelihoodFieldTest, IncrementalUpdateRebuildsWhenObstacleIsFreed)
 
   const auto changes = mapper.takeAndClearMapChanges();
 
-  ASSERT_TRUE(changes.newly_occupied.empty());
-  ASSERT_FALSE(changes.newly_freed.empty());
+  ASSERT_TRUE(changes.cells_changed_to_occupied.empty());
+  ASSERT_FALSE(changes.cells_changed_to_free.empty());
 
   field.incrementalUpdate(
     mapper,
     kMaxDistance,
     kSigma,
-    changes.newly_occupied,
-    changes.newly_freed,
+    changes.cells_changed_to_occupied,
+    changes.cells_changed_to_free,
     0U);
 
   slam_fastslam::LikelihoodField rebuilt_field;

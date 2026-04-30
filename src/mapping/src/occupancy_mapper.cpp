@@ -20,30 +20,30 @@ void OccupancyMapper::configure(const Config & config)
 void OccupancyMapper::clear()
 {
   map_log_odds_.assign(config_.width * config_.height, 0.0);
-  newly_occupied_.clear();
-  newly_freed_.clear();
+  cells_changed_to_occupied_.clear();
+  cells_changed_to_free_.clear();
 }
 
-void OccupancyMapper::updateCell(int index, double delta)
+void OccupancyMapper::updateCellLogOddsAndTrackChange(int index, double log_odds_delta)
 {
   const bool was_occupied = map_log_odds_[index] > 0.0;
   map_log_odds_[index] =
-    clamp(map_log_odds_[index] + delta, config_.log_odds_min, config_.log_odds_max);
+    clamp(map_log_odds_[index] + log_odds_delta, config_.log_odds_min, config_.log_odds_max);
   const bool is_occupied = map_log_odds_[index] > 0.0;
   if (!was_occupied && is_occupied) {
-    newly_occupied_.push_back(index);
+    cells_changed_to_occupied_.push_back(index);
   } else if (was_occupied && !is_occupied) {
-    newly_freed_.push_back(index);
+    cells_changed_to_free_.push_back(index);
   }
 }
 
 OccupancyMapper::MapChanges OccupancyMapper::takeAndClearMapChanges()
 {
   MapChanges changes;
-  changes.newly_occupied = std::move(newly_occupied_);
-  changes.newly_freed = std::move(newly_freed_);
-  newly_occupied_.clear();
-  newly_freed_.clear();
+  changes.cells_changed_to_occupied = std::move(cells_changed_to_occupied_);
+  changes.cells_changed_to_free = std::move(cells_changed_to_free_);
+  cells_changed_to_occupied_.clear();
+  cells_changed_to_free_.clear();
   return changes;
 }
 
@@ -134,11 +134,11 @@ void OccupancyMapper::updateWithScanData(
 
     const std::size_t free_cell_count = endpoint_is_hit ? cells.size() - 1U : cells.size();
     for (std::size_t j = 0; j < free_cell_count; ++j) {
-      updateCell(gridToIndex(cells[j].first, cells[j].second), log_odds_pass_);
+      updateCellLogOddsAndTrackChange(gridToIndex(cells[j].first, cells[j].second), log_odds_pass_);
     }
 
     if (endpoint_is_hit) {
-      updateCell(gridToIndex(cells.back().first, cells.back().second), log_odds_hit_);
+      updateCellLogOddsAndTrackChange(gridToIndex(cells.back().first, cells.back().second), log_odds_hit_);
     }
   }
 }

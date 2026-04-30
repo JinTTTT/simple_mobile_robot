@@ -129,7 +129,8 @@ FastSlamUpdateResult FastSlam::update(
     const auto changes = particle.mapper.takeAndClearMapChanges();
     particle.likelihood_field.incrementalUpdate(
       particle.mapper, parameters_.likelihood_max_distance, parameters_.likelihood_sigma,
-      changes.newly_occupied, changes.newly_freed, parameters_.freed_cells_rebuild_threshold);
+      changes.cells_changed_to_occupied, changes.cells_changed_to_free,
+      parameters_.freed_cells_rebuild_threshold);
     particle.has_map = true;
   }
 
