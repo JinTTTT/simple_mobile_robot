@@ -55,7 +55,7 @@ sensor_msgs::msg::LaserScan makeLaserScan(const std::vector<float> & ranges)
 slam_fastslam::LikelihoodField buildField(const OccupancyMapper & mapper)
 {
   slam_fastslam::LikelihoodField field;
-  field.build(mapper, kMaxDistance, kSigma);
+  field.buildFromOccupancyMap(mapper, kMaxDistance, kSigma);
   return field;
 }
 

@@ -172,7 +172,7 @@ double ScanScorer::scoreParticle(
     const double hit_x = laser_x + beam.range * beam_world_cos;
     const double hit_y = laser_y + beam.range * beam_world_sin;
     if (beam.endpoint_is_hit) {
-      const double beam_score = likelihood_field.valueAtWorld(hit_x, hit_y);
+      const double beam_score = likelihood_field.likelihoodAtWorld(hit_x, hit_y);
       log_likelihood += std::log(std::max(beam_score, kMinBeamLikelihood));
     } else {
       log_likelihood += freeSpaceBeamReward(mapper, laser_x, laser_y, hit_x, hit_y);

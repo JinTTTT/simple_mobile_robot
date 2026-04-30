@@ -1,27 +1,26 @@
+/// OccupancyMapper owns a log-odds occupancy grid and integrates laser scans into it.
+///
+/// Public API:
+/// - configure()/clear(): initialize or reset the grid map.
+/// - updateWithScan()/updateWithScanData(): integrate laser measurements into map_log_odds_.
+/// - takeAndClearMapChanges(): return cells whose occupied/free state changed.
+/// - buildOccupancyGridMsg(): export the internal map as a ROS OccupancyGrid.
+///
+/// Scan integration flow:
+///   updateWithScan()
+///     -> updateWithScanData()
+///       -> bresenhamLine()
+///       -> updateCellLogOddsAndTrackChange()
+///         -> update map_log_odds_
+///         -> record changed cells
+///
+/// FastSLAM likelihood-field update:
+///   takeAndClearMapChanges()
+///     -> pass changed cells to FastSLAM
+///     -> clear temporary change buffers
+///   likelihood_field.updateFromMapChanges()
+///     -> update the likelihood field from those changed cells
 #pragma once
-
-// OccupancyMapper maintains a log-odds occupancy grid and integrates laser scans into it.
-//
-// Public API responsibilities:
-// - configure()/clear(): initialize or reset the grid map.
-// - updateWithScan()/updateWithScanData(): integrate laser measurements into map_log_odds_.
-// - takeAndClearMapChanges(): return cells whose occupied/free state changed since the last call.
-// - buildOccupancyGridMsg(): convert the internal log-odds map to a ROS OccupancyGrid message.
-//
-// Mapping and FastSLAM update flow:
-// updateWithScan()
-//   -> updateWithScanData()
-//     -> bresenhamLine()
-//     -> updateCellLogOddsAndTrackChange()
-//       -> update map_log_odds_
-//       -> record changed cells
-//
-// takeAndClearMapChanges()
-//   -> pass changed cells to FastSLAM
-//   -> clear temporary change buffers
-//
-// likelihood_field.incrementalUpdate()
-//   -> update the likelihood field from those changed cells
 
 #include "builtin_interfaces/msg/time.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"

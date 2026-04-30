@@ -127,7 +127,7 @@ FastSlamUpdateResult FastSlam::update(
     particle.mapper.updateWithScan(scan, map_laser_x, map_laser_y, map_laser_theta);
 
     const auto changes = particle.mapper.takeAndClearMapChanges();
-    particle.likelihood_field.incrementalUpdate(
+    particle.likelihood_field.updateFromMapChanges(
       particle.mapper, parameters_.likelihood_max_distance, parameters_.likelihood_sigma,
       changes.cells_changed_to_occupied, changes.cells_changed_to_free,
       parameters_.freed_cells_rebuild_threshold);

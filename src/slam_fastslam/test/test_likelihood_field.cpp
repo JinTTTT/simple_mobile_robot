@@ -62,12 +62,12 @@ TEST(LikelihoodFieldTest, IncrementalOccupiedUpdateIncreasesLikelihoodNearNewObs
 
   mapper.updateWithScanData(makeSingleHitScan(1.0), 1.5, 1.5, 0.0);
   clearMapperChanges(mapper);
-  field.build(mapper, kMaxDistance, kSigma);
+  field.buildFromOccupancyMap(mapper, kMaxDistance, kSigma);
 
-  const double before_old_obstacle = field.valueAtWorld(2.5, 1.5);
-  const double before_new_obstacle = field.valueAtWorld(7.5, 1.5);
-  const double before_near_new_obstacle = field.valueAtWorld(6.5, 1.5);
-  const double before_unaffected_cell = field.valueAtWorld(4.5, 1.5);
+  const double before_old_obstacle = field.likelihoodAtWorld(2.5, 1.5);
+  const double before_new_obstacle = field.likelihoodAtWorld(7.5, 1.5);
+  const double before_near_new_obstacle = field.likelihoodAtWorld(6.5, 1.5);
+  const double before_unaffected_cell = field.likelihoodAtWorld(4.5, 1.5);
 
   mapper.updateWithScanData(makeSingleHitScan(1.0), 6.5, 1.5, 0.0);
 
@@ -76,7 +76,7 @@ TEST(LikelihoodFieldTest, IncrementalOccupiedUpdateIncreasesLikelihoodNearNewObs
   ASSERT_FALSE(changes.cells_changed_to_occupied.empty());
   ASSERT_TRUE(changes.cells_changed_to_free.empty());
 
-  field.incrementalUpdate(
+  field.updateFromMapChanges(
     mapper,
     kMaxDistance,
     kSigma,
@@ -84,10 +84,10 @@ TEST(LikelihoodFieldTest, IncrementalOccupiedUpdateIncreasesLikelihoodNearNewObs
     changes.cells_changed_to_free,
     100U);
 
-  EXPECT_NEAR(field.valueAtWorld(2.5, 1.5), before_old_obstacle, 1e-12);
-  EXPECT_GT(field.valueAtWorld(7.5, 1.5), before_new_obstacle);
-  EXPECT_GT(field.valueAtWorld(6.5, 1.5), before_near_new_obstacle);
-  EXPECT_NEAR(field.valueAtWorld(4.5, 1.5), before_unaffected_cell, 1e-12);
+  EXPECT_NEAR(field.likelihoodAtWorld(2.5, 1.5), before_old_obstacle, 1e-12);
+  EXPECT_GT(field.likelihoodAtWorld(7.5, 1.5), before_new_obstacle);
+  EXPECT_GT(field.likelihoodAtWorld(6.5, 1.5), before_near_new_obstacle);
+  EXPECT_NEAR(field.likelihoodAtWorld(4.5, 1.5), before_unaffected_cell, 1e-12);
 }
 
 TEST(LikelihoodFieldTest, IncrementalUpdateRebuildsWhenObstacleIsFreed)
@@ -99,10 +99,10 @@ TEST(LikelihoodFieldTest, IncrementalUpdateRebuildsWhenObstacleIsFreed)
   mapper.updateWithScanData(makeSingleHitScan(1.0), 1.5, 1.5, 0.0);
   mapper.updateWithScanData(makeSingleHitScan(1.0), 6.5, 1.5, 0.0);
   clearMapperChanges(mapper);
-  field.build(mapper, kMaxDistance, kSigma);
+  field.buildFromOccupancyMap(mapper, kMaxDistance, kSigma);
 
-  const double before_old_obstacle = field.valueAtWorld(2.5, 1.5);
-  const double before_removed_obstacle = field.valueAtWorld(7.5, 1.5);
+  const double before_old_obstacle = field.likelihoodAtWorld(2.5, 1.5);
+  const double before_removed_obstacle = field.likelihoodAtWorld(7.5, 1.5);
 
   mapper.updateWithScanData(makeNoHitScan(3.0), 6.5, 1.5, 0.0);
 
@@ -111,7 +111,7 @@ TEST(LikelihoodFieldTest, IncrementalUpdateRebuildsWhenObstacleIsFreed)
   ASSERT_TRUE(changes.cells_changed_to_occupied.empty());
   ASSERT_FALSE(changes.cells_changed_to_free.empty());
 
-  field.incrementalUpdate(
+  field.updateFromMapChanges(
     mapper,
     kMaxDistance,
     kSigma,
@@ -120,12 +120,12 @@ TEST(LikelihoodFieldTest, IncrementalUpdateRebuildsWhenObstacleIsFreed)
     0U);
 
   slam_fastslam::LikelihoodField rebuilt_field;
-  rebuilt_field.build(mapper, kMaxDistance, kSigma);
+  rebuilt_field.buildFromOccupancyMap(mapper, kMaxDistance, kSigma);
 
-  EXPECT_NEAR(field.valueAtWorld(2.5, 1.5), before_old_obstacle, 1e-12);
-  EXPECT_LT(field.valueAtWorld(7.5, 1.5), before_removed_obstacle);
+  EXPECT_NEAR(field.likelihoodAtWorld(2.5, 1.5), before_old_obstacle, 1e-12);
+  EXPECT_LT(field.likelihoodAtWorld(7.5, 1.5), before_removed_obstacle);
   EXPECT_NEAR(
-    field.valueAtWorld(7.5, 1.5),
-    rebuilt_field.valueAtWorld(7.5, 1.5),
+    field.likelihoodAtWorld(7.5, 1.5),
+    rebuilt_field.likelihoodAtWorld(7.5, 1.5),
     1e-12);
 }
