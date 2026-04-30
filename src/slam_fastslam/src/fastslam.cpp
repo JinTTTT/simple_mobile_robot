@@ -106,9 +106,6 @@ FastSlamUpdateResult FastSlam::update(
     selected_particle_id_ = particles_[selected_particle_index].id;
   }
 
-  std::vector<int> newly_occupied;
-  std::vector<int> newly_freed;
-
   // Every particle carries its own map hypothesis; update each map from the
   // same scan transformed through that particle's pose.
   for (auto & particle : particles_) {
@@ -129,10 +126,10 @@ FastSlamUpdateResult FastSlam::update(
     const double map_laser_theta = particle.pose.theta + laser_offset_.theta;
     particle.mapper.updateWithScan(scan, map_laser_x, map_laser_y, map_laser_theta);
 
-    particle.mapper.getAndClearChanges(newly_occupied, newly_freed);
+    const auto changes = particle.mapper.takeAndClearMapChanges();
     particle.likelihood_field.incrementalUpdate(
       particle.mapper, parameters_.likelihood_max_distance, parameters_.likelihood_sigma,
-      newly_occupied, newly_freed, parameters_.freed_cells_rebuild_threshold);
+      changes.newly_occupied, changes.newly_freed, parameters_.freed_cells_rebuild_threshold);
     particle.has_map = true;
   }
 

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <string>
+#include <utility>
 
 void OccupancyMapper::configure(const Config & config)
 {
@@ -36,14 +37,14 @@ void OccupancyMapper::updateCell(int index, double delta)
   }
 }
 
-void OccupancyMapper::getAndClearChanges(
-  std::vector<int> & newly_occupied,
-  std::vector<int> & newly_freed)
+OccupancyMapper::MapChanges OccupancyMapper::takeAndClearMapChanges()
 {
-  newly_occupied = std::move(newly_occupied_);
-  newly_freed = std::move(newly_freed_);
+  MapChanges changes;
+  changes.newly_occupied = std::move(newly_occupied_);
+  changes.newly_freed = std::move(newly_freed_);
   newly_occupied_.clear();
   newly_freed_.clear();
+  return changes;
 }
 
 const OccupancyMapper::Config & OccupancyMapper::getConfig() const
@@ -170,8 +171,7 @@ nav_msgs::msg::OccupancyGrid OccupancyMapper::buildOccupancyGridMsg(
   return map_msg;
 }
 
-std::vector<std::pair<int, int>> OccupancyMapper::bresenhamLine(int x0, int y0, int x1, int y1)
-  const
+std::vector<std::pair<int, int>> OccupancyMapper::bresenhamLine(int x0, int y0, int x1, int y1) const
 {
   std::vector<std::pair<int, int>> cells;
 

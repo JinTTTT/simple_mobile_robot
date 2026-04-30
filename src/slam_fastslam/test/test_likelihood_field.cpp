@@ -49,9 +49,7 @@ OccupancyMapper::ScanData makeNoHitScan(double range_max)
 
 void clearMapperChanges(OccupancyMapper & mapper)
 {
-  std::vector<int> newly_occupied;
-  std::vector<int> newly_freed;
-  mapper.getAndClearChanges(newly_occupied, newly_freed);
+  mapper.takeAndClearMapChanges();
 }
 
 }  // namespace
@@ -73,19 +71,17 @@ TEST(LikelihoodFieldTest, IncrementalOccupiedUpdateIncreasesLikelihoodNearNewObs
 
   mapper.updateWithScanData(makeSingleHitScan(1.0), 6.5, 1.5, 0.0);
 
-  std::vector<int> newly_occupied;
-  std::vector<int> newly_freed;
-  mapper.getAndClearChanges(newly_occupied, newly_freed);
+  const auto changes = mapper.takeAndClearMapChanges();
 
-  ASSERT_FALSE(newly_occupied.empty());
-  ASSERT_TRUE(newly_freed.empty());
+  ASSERT_FALSE(changes.newly_occupied.empty());
+  ASSERT_TRUE(changes.newly_freed.empty());
 
   field.incrementalUpdate(
     mapper,
     kMaxDistance,
     kSigma,
-    newly_occupied,
-    newly_freed,
+    changes.newly_occupied,
+    changes.newly_freed,
     100U);
 
   EXPECT_NEAR(field.valueAtWorld(2.5, 1.5), before_old_obstacle, 1e-12);
@@ -110,19 +106,17 @@ TEST(LikelihoodFieldTest, IncrementalUpdateRebuildsWhenObstacleIsFreed)
 
   mapper.updateWithScanData(makeNoHitScan(3.0), 6.5, 1.5, 0.0);
 
-  std::vector<int> newly_occupied;
-  std::vector<int> newly_freed;
-  mapper.getAndClearChanges(newly_occupied, newly_freed);
+  const auto changes = mapper.takeAndClearMapChanges();
 
-  ASSERT_TRUE(newly_occupied.empty());
-  ASSERT_FALSE(newly_freed.empty());
+  ASSERT_TRUE(changes.newly_occupied.empty());
+  ASSERT_FALSE(changes.newly_freed.empty());
 
   field.incrementalUpdate(
     mapper,
     kMaxDistance,
     kSigma,
-    newly_occupied,
-    newly_freed,
+    changes.newly_occupied,
+    changes.newly_freed,
     0U);
 
   slam_fastslam::LikelihoodField rebuilt_field;

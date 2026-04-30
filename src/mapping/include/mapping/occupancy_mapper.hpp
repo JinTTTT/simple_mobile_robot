@@ -36,6 +36,12 @@ public:
     bool publish_unknown_for_unobserved = false;
   };
 
+  struct MapChanges
+  {
+    std::vector<int> newly_occupied;
+    std::vector<int> newly_freed;
+  };
+
   void configure(const Config & config);
   void clear();
 
@@ -57,9 +63,7 @@ public:
 
   // Retrieve cells that crossed the occupancy threshold since the last call,
   // then clear the internal lists.
-  void getAndClearChanges(
-    std::vector<int> & newly_occupied,
-    std::vector<int> & newly_freed);
+  MapChanges takeAndClearMapChanges();
 
   const Config & getConfig() const;
   const std::vector<double> & getLogOdds() const;
